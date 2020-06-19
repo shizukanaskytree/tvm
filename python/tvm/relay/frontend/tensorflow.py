@@ -1945,11 +1945,11 @@ _convert_map = {
     'Abs'                               : AttrCvt('abs'),
     'Acos'                              : AttrCvt('acos'),
     'Acosh'                             : AttrCvt('acosh'),
-    'Add'                               : _elemwise('add'),
-    'AddN'                              : _add_n(),
+    'Add'                               : _elemwise('add'), # ✅
+    'AddN'                              : _add_n(), # ✅
     'AddV2'                             : _elemwise('add'),
-    'All'                               : _reduce('all'),
-    'Any'                               : _reduce('any'),
+    'All'                               : _reduce('all'), # ✅
+    'Any'                               : _reduce('any'), # ✅
     'ArgMax'                            : _argx(_op.argmax, 'argmax'),
     'ArgMin'                            : _argx(_op.argmin, 'argmin'),
     'Asin'                              : AttrCvt('asin'),

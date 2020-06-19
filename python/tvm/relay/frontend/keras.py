@@ -25,10 +25,17 @@ from .. import analysis
 from .. import expr as _expr
 from .. import function as _function
 from .. import op as _op
+# python/tvm/relay/op/__init__.py ↑
 from ... import nd as _nd
 from .common import ExprTable, new_var
 
 __all__ = ['from_keras']
+# 1.
+# 当别人 from python/tvm/relay/frontend/keras.py import * 时
+# 只能从这个文件中 export 出 from_keras 这个函数. 其他的对外不可见.
+#
+# def from_keras(model, shape=None, layout='NCHW'):
+#   """Convert keras model to relay Function.
 
 
 def _check_data_format(keras_layer):
@@ -64,13 +71,45 @@ def _convert_recurrent_activation(inexpr, keras_layer):
 
 
 def _convert_activation(inexpr, keras_layer, _):
+    # 1.
+    # Activation
+    # conv1_relu (Activation)  (None, 112, 112, 64) 0  conv1_bn[0][0]
+    # example: https://gist.github.com/shizukanaskytree/9b37765afb024c948f3714b8a629d7a5#file-expression_table_names-log-L44
+
+    # 2.
+    # inexpr value:
+    # https://gist.github.com/shizukanaskytree/5c3579cf2f2bbfe49249837260c59d8c
+
+    # 2.1
+    # 由于上面没有 nn.relu, 所以我又 double-check 了一下:
+    # https://gist.github.com/shizukanaskytree/4a7f59319bb831006a0feb4b25b039f2#file-etable_name_out-log-L506
+    # 解释: 可能是传入前的所以 nn.relu 还没构造出来.
+
+    # 3.
+    # keras_layer value:
+    # <tensorflow.python.keras.layers.core.Activation object at 0x7fbe116f5898>
+
+    # 4.
+    # _ は?
+    # _ : <tvm.relay.frontend.common.ExprTable object at 0x7fbdd43152b0>
+
     if isinstance(keras_layer, str):
+        # 未进入
         act_type = keras_layer
     else:
+        # 进入
         if sys.version_info.major < 3:
+            # 未进入
+            # 1.
+            # sys.version_info.major == 3
             act_type = keras_layer.activation.func_name
         else:
+            # 进入
             act_type = keras_layer.activation.__name__
+            # 1.
+            # act_type value:
+            # 'relu'
+
     if act_type == 'linear':
         if isinstance(keras_layer, str):
             return inexpr
@@ -86,7 +125,39 @@ def _convert_activation(inexpr, keras_layer, _):
     if act_type == 'tanh':
         return _op.tanh(inexpr)
     if act_type == 'relu':
+        # 1.
+        # relu 实例:
+        # https://gist.github.com/shizukanaskytree/9b37765afb024c948f3714b8a629d7a5#file-expression_table_names-log-L44
+
         return _op.nn.relu(inexpr)
+        # 1.
+        # inexpr value:
+        # https://gist.github.com/shizukanaskytree/5c3579cf2f2bbfe49249837260c59d8c
+
+        # 1.1
+        # 由于上面没有 nn.relu, 所以我又 double-check 了一下:
+        # https://gist.github.com/shizukanaskytree/4a7f59319bb831006a0feb4b25b039f2#file-etable_name_out-log-L506
+        # 解释: 可能是传入前的所以 nn.relu 还没构造出来.
+
+        # 2.
+        # # python/tvm/relay/op/nn/nn.py ↓
+        # def relu(data):
+        # - data: tvm.relay.Expr, The input data.
+
+        # 3.
+        # 🛑 ⽌ since `return`
+
+        # 4.
+        # return to python/tvm/relay/frontend/keras.py:
+        # def keras_op_to_relay(inexpr, keras_layer, outname, etab):
+        #   outs = _convert_map[op_name](inexpr, keras_layer, etab)
+        #   ↳ 没错, 就是这里, 这里是上面这个完成后的首末站!
+        #
+        # 4.1
+        # 那时的结果是:
+        # https://gist.github.com/shizukanaskytree/735e0c30df0dbc58e55d7deeef309041
+        # - nn.relu(%4)
+
     if act_type == 'softplus':
         return _op.log(_op.add(_op.exp(inexpr), _expr.const(1., dtype='float32')))
     if act_type == 'elu':
@@ -106,8 +177,20 @@ def _convert_activation(inexpr, keras_layer, _):
         return _op.clip(inexpr, a_min=0., a_max=6.)
     if act_type == 'softsign':
         return inexpr / (_expr.const(1., dtype='float32') + _op.abs(inexpr))
+        # 1.
+        # _op.abs path:
+        # python/tvm/relay/op/tensor.py
+
+        # 2.
+        # QQQ: inexpr 为什么可以 除以一个 _expr.const ???
+        # AAA:
+
     if act_type == 'hard_sigmoid':
         x = (_expr.const(0.2, dtype='float32') * inexpr) + _expr.const(0.5, dtype='float32')
+        # 1.
+        # QQQ: _expr.const(0.2, dtype='float32') * inexpr 为什么可以乘起来???
+        # AAA:
+
         return _op.clip(x, a_min=0., a_max=1.)
 
     raise tvm.error.OpNotImplemented(
@@ -128,16 +211,32 @@ def _convert_advanced_activation(inexpr, keras_layer, etab):
         else:
             axis = axis + 1 if axis < dims - 1 else 1
         return _op.nn.softmax(inexpr, axis=axis)
+        # 1.
+        # _op.nn.softmax path:
+        # relay.op.nn.nn.softmax
+
     if act_type == 'ReLU':
         threshold = _expr.const(keras_layer.threshold, dtype='float32')
+        # 1.
+        # _expr.const path:
+        # relay.expr.const
+
         if keras_layer.max_value and float(keras_layer.threshold) == 0:
             # f(x) = max_value, for x >= max_value
             # f(x) = x,         for threshold <= x < max_value
             return _op.clip(inexpr, a_min=0., a_max=float(keras_layer.max_value))
+            # 1.
+            # _op.clip path:
+            # relay.op.tensor.clip
+
         if keras_layer.max_value and _op.greater(threshold, inexpr).astype('float32'):
             # f(x) = negative_slope * (inexpr - threshold)
             negative_slope = _expr.const(keras_layer.negative_slope, dtype='float32')
             return _op.multiply(negative_slope, _op.subtract(inexpr, threshold))
+            # 1.
+            # _op.multiply path:
+            # relay.op.tensor.multiply
+
         return _op.nn.relu(inexpr)
     if act_type == 'LeakyReLU':
         return _op.nn.leaky_relu(inexpr, alpha=float(keras_layer.alpha))
@@ -152,6 +251,10 @@ def _convert_advanced_activation(inexpr, keras_layer, etab):
         alpha = etab.new_const(keras_layer.get_weights()[0] \
                                .transpose(np.roll(range(size), 1)))
         return _op.negative(alpha) * _op.nn.relu(_op.negative(inexpr)) + _op.nn.relu(inexpr)
+        # 1.
+        # _op.negative path:
+        # relay.op.tensor.negative
+
     if act_type == 'ThresholdedReLU':
         theta = keras_layer.theta if hasattr(keras_layer, 'theta') else 1.
         return _op.multiply(inexpr, _op.greater(inexpr, \
@@ -217,6 +320,10 @@ def _convert_embedding(inexpr, keras_layer, etab):
 
 def _convert_dense(inexpr, keras_layer, etab):
     weightList = keras_layer.get_weights()
+    # 1.
+    # SO: Keras: Interpreting the output of get_weights() of dense layer in keras.
+    # https://stackoverflow.com/questions/46817085/keras-interpreting-the-output-of-get-weights
+
     weight = etab.new_const(weightList[0].transpose([1, 0]))
     params = {'weight': weight, 'units': weightList[0].shape[1]}
     input_shape = keras_layer.input_shape
@@ -245,18 +352,149 @@ def _convert_dense(inexpr, keras_layer, etab):
 
 
 def _convert_convolution(inexpr, keras_layer, etab):
+    # 1.
+    # called from :
+    # # python/tvm/relay/frontend/keras.py ↓
+    # outs = _convert_map[op_name](inexpr, keras_layer, etab)
+
+    # 1.1
+    # op_name = "Conv2D"
+
+    # 2.
+    # arguments:
+    # https://gist.github.com/shizukanaskytree/dde75d6f313950042f6ee6e2ab136198#file-out_head_1500-log-L401-L410
+
+    # 2.1
+    # inexpr value:
+    # https://gist.github.com/shizukanaskytree/dde75d6f313950042f6ee6e2ab136198#file-out_head_1500-log-L405-L407
+
     _check_data_format(keras_layer)
     is_deconv = type(keras_layer).__name__ == 'Conv2DTranspose'
+    # 1.
+    # type(keras_layer) value:
+    # <class 'tensorflow.python.keras.layers.convolutional.Conv2D'>
+    #
+    # 1.1
+    # type(keras_layer).__name__ value:
+    # 'Conv2D'
+
+    # 2.
+    # is_deconv value:
+    # False
+
     is_depthconv = type(keras_layer).__name__ == 'DepthwiseConv2D'
+    # 1.
+    # is_depthconv value:
+    # False
+
     weightList = keras_layer.get_weights()
+    # 1.
+    # weightList value:
+    # https://gist.github.com/shizukanaskytree/07386d387ee60f0e4494519367545d5c
+
+    # 1.1
+    # weightList shape:
+    # 1. (7,7,3,64) -- 64 个 filters
+    # 2. (64,) -- 64 个 bias, 施加(+ / add)到 每层 output 的 bias 都是同样的值
+    # https://keep.google.com/u/1/#NOTE/1VbnxLbsKE1MJny0YLKTQJa4oy2YwVInZQLvkIXZCE-7wM0ELfouFv-_azNOkbA
+    # comment: 具体为什么是这个 HWCN 格式我没有查到文档说明.
+
+    # 1.1.1
+    # Q: Keras get_weights 输出形状 为什么是 HWCN 格式?
+    # https://keras.io/zh/layers/about-keras-layers/
+    # A:
+    # layer.get_weights(): 以含有Numpy矩阵的列表形式返回层的权重。
+    # layer.set_weights(weights): 从含有Numpy矩阵的列表中设置层的权重（与get_weights的输出形状相同）。
+
+    # 1.1.2
+    # Keras ResNet50 code:
+    # 1st Conv2D:
+    # https://github.com/keras-team/keras-applications/blob/master/keras_applications/resnet50.py#L226-L230
+    #
+    # all code:
+    # https://github.com/keras-team/keras-applications/blob/master/keras_applications/resnet50.py
+
+    # 1.1.1
+    # Keras layers API
+    # - https://keras.io/api/layers/
+    # 其中的例子, 你看!
+    #  [<tf.Variable 'dense/kernel:0' shape=(20, 32) dtype=float32>,
+    #  <tf.Variable 'dense/bias:0' shape=(32,) dtype=float32>]
+
+    # 1.1.1
+    # weights property in The base Layer class:
+    # https://keras.io/api/layers/base_layer/#weights-property
+
+    # 1.1.2
+    # get_weights: tf keras API: tf.keras.layers.Layer | TensorFlow Core v2.2.0
+    # https://www.tensorflow.org/api_docs/python/tf/keras/layers/Layer#get_weights
+
+    # 1.1.3
+    # SO: How do I get the weights of a layer in Keras?
+    # https://stackoverflow.com/questions/43715047/how-do-i-get-the-weights-of-a-layer-in-keras
+
+    # 1.1.4
+    # ResNet Convolution 推导和图示:
+    # Figure 4. Conv1 — Convolution
+    # Figure 6. Layer 1, block 1, operation 1
+    # in the post:
+    # https://towardsdatascience.com/understanding-and-visualizing-resnets-442284831be8
+    # https://keras.io/guides/functional_api/ <== 自己打印啦
+
+    # 1.1.5
+    # ResNet50 keras application github code:
+    # 目的是找到为什么 weights 是按照 (7,7,3,64) 这样排布的或者输出的?
+    # ResNet50 each layer's shape
+
+    # 1.1.6
+    # 相关可视化的链接
+    # https://keras.io/guides/functional_api/
+    # https://cloud.tencent.com/developer/article/1065135
+    # https://zhuanlan.zhihu.com/p/24833574
+
+    # 1.2
+    # weightList type:
+    # list, len=2, within it is np.array
+
+    # 2.
+    # Convolution layer weights in keras は？
+    # https://stackoverflow.com/questions/43305891/how-to-correctly-get-layer-weights-from-conv2d-in-keras
+    # weight 就是 那些 filters 里面的值啊, 就是上面 SO 链接里面的那些黑色, 灰色的那些值啊.
+    # 上面那个帖子里面只显示了 25 个 filter 的 case .
+
+    # 2.1
+    # Keras Conv2D API:
+    # https://keras.io/api/layers/convolution_layers/convolution2d/
+    # Conv2D(filters, ...) 里面的 filters 是指
+    # The convolution layer comprises of a set of independent filters (6 in the example shown).
+    # shown in fig 5 in
+    # https://medium.com/technologymadeeasy/the-best-explanation-of-convolutional-neural-networks-on-the-internet-fbb8b1ad5df8
+
+    # 3.
+    # Convolution explain in CNN
+    # https://medium.com/technologymadeeasy/the-best-explanation-of-convolutional-neural-networks-on-the-internet-fbb8b1ad5df8
+
     weight = weightList[0]
+    # 1.
+    # 取出 weights 那个
+    # (7,7,3,64) -- 64 个 filters
+
     if etab.data_layout == 'NHWC':
+        # 1.
+        # etab.data_layout value:
+        # 'NCHW'
+
+        # 未进入!
         if is_depthconv:
             kernel_layout = 'HWOI'
         else:
             kernel_layout = 'HWIO'
     else:
+        # 进入这个分支!
         kernel_layout = 'OIHW'
+        # 1.
+        # I: input channels
+        # 教程: https://oneapi-src.github.io/oneDNN/understanding_memory_formats.html
 
     if is_deconv:
         kernel_h, kernel_w, n_filters, in_channels = weight.shape
@@ -267,17 +505,71 @@ def _convert_convolution(inexpr, keras_layer, etab):
         if kernel_layout == 'OIHW':
             weight = weight.transpose([2, 3, 0, 1])
     elif etab.data_layout == 'NCHW':
+        # 进入!
+
+        # 1.
+        # QQQ: 为什么 'NCHW' 对应如下时却是 (h w c n) ?
+        # AAA: 可能说目标是 'NCHW' 但是输入其实是 'HWCN'
+
         kernel_h, kernel_w, in_channels, n_filters = weight.shape
+        # 1.
+        # weight.shape value:
+        # (7,7,3,64)
+        # 所以如下才进行了挪位处理.
+
         weight = weight.transpose([3, 2, 0, 1])
     else:
         kernel_h, kernel_w, in_channels, n_filters = weight.shape
+
     if isinstance(keras_layer.dilation_rate, (list, tuple)):
+        # 1.
+        # 进入
         dilation = [keras_layer.dilation_rate[0], keras_layer.dilation_rate[1]]
+        # 1.
+        # keras_layer.dilation_rate value:
+        # (1,1)
+        # - dilation rate k=1 is normal convolution
+
+        # 2.
+        # Explain Dilated Convolution:
+        # 扩大的；膨胀的；加宽的
+        # https://towardsdatascience.com/understanding-2d-dilated-convolution-operation-with-examples-in-numpy-and-tensorflow-with-d376b3972b25
+
+        # 3.
+        # Explain dilation_rate concept in conv2d:
+        # https://erogol.com/dilated-convolution/
+        # https://www.pyimagesearch.com/2018/12/31/keras-conv2d-and-convolutional-layers/
+        #
+        # dilation rate k
+        # k=1 means normal convolution. Fig (a)
+        # k=2 means skipping 1 pixels. Fig (b)
+        # k=4 means skipping 3 pixels. Fig (c)
+        # https://erogol.com/dilated-convolution/#:~:text=Dilated%20Convolution,4%20means%20skipping%203%20pixels.
+
+        # 3.1
+        # Experiment
+        # https://towardsdatascience.com/understanding-2d-dilated-convolution-operation-with-examples-in-numpy-and-tensorflow-with-d376b3972b25
+        # ↑ 上面这个帖子先用 numpy 硬撸一遍得到结果作为预期, 再用 tf code 实现一遍对比结果.
+        # 代码: https://gist.github.com/shizukanaskytree/1500d791d5420b2597373e0bd24cf47f
+
     else:
         dilation = [keras_layer.dilation_rate, keras_layer.dilation_rate]
+
     dilated_kernel_h = (kernel_h - 1) * dilation[0] + 1
+    # 1.
+    # value:
+    # 7
     dilated_kernel_w = (kernel_w - 1) * dilation[1] + 1
+    # 1.
+    # value:
+    # 7
     stride_h, stride_w = keras_layer.strides
+    # 1.
+    # value:
+    # 2, 2
+    # double-check code:
+    # https://github.com/keras-team/keras-applications/blob/master/keras_applications/resnet50.py#L227
+
     params = {'weight': etab.new_const(weight),
               'kernel_size': [kernel_h, kernel_w],
               'strides': [stride_h, stride_w],
@@ -285,12 +577,30 @@ def _convert_convolution(inexpr, keras_layer, etab):
               'padding': [0, 0],
               'data_layout': etab.data_layout,
               'kernel_layout': kernel_layout}
+    # 1.
+    # params value:
+    # - weight:
+    #   {ndarray:(64,3,7,7)}
+    #   Value: https://gist.github.com/shizukanaskytree/07386d387ee60f0e4494519367545d5c
+    # - [kernel_h, kernel_w]=[7,7]
+    # - [stride_h, stride_w]=[2,2]
+    # - dilation=(1,1)
+    # - etab.data_layout='NCHW'
+    # - kernel_layout='OIHW'
+    #
+    # params value:
+    # {'weight': Var(_param_1, ty=TensorType([64, 3, 7, 7], float32)), 'kernel_size': [7, 7], 'strides': [2, 2], 'dilation': [1, 1], 'padding': [0, 0], 'data_layout': 'NCHW', 'kernel_layout': 'OIHW'}
+
     if is_depthconv:
         params['channels'] = in_channels * depth_mult
         params['groups'] = in_channels
     else:
         params['channels'] = n_filters
+        # 1.
+        # n_filters: numbers of filters = 64
+
     if keras_layer.padding == 'valid':
+        # 进入
         pass
     # we insert a separate pad operator
     elif keras_layer.padding == 'same':
@@ -303,10 +613,17 @@ def _convert_convolution(inexpr, keras_layer, etab):
         msg = 'Padding with {} is not supported for operator Convolution ' \
               'in frontend Keras.'
         raise tvm.error.OpAttributeUnImplemented(msg.format(keras_layer.padding))
+
     if is_deconv:
         out = _op.nn.conv2d_transpose(data=inexpr, **params)
     else:
         out = _op.nn.conv2d(data=inexpr, **params)
+        # 1.
+        # ✅ 关键的最终步: 外对内传入 _op.nn.conv2d
+
+        # 2.1
+        # inexpr value:
+        # https://gist.github.com/shizukanaskytree/dde75d6f313950042f6ee6e2ab136198#file-out_head_1500-log-L405-L407
 
     if keras_layer.use_bias:
         bias = etab.new_const(weightList[1])
@@ -616,7 +933,24 @@ def _convert_cropping(inexpr, keras_layer, _):
 
 
 def _convert_batchnorm(inexpr, keras_layer, etab):
+    # 1.
+    # inexpr value:
+    # https://gist.github.com/shizukanaskytree/dde75d6f313950042f6ee6e2ab136198#file-out_head_1500-log-L418-L423
+
+    # 2.
+    # keras_layer value:
+    # <tensorflow.python.keras.layers.normalization_v2.BatchNormalization object at 0x7f23cf928908>
+
+    # 3.
+    # etab value:
+    # https://keep.google.com/u/1/#NOTE/1h2_-6AudNGzfWFgddrAYOfT6bIthB72lqXfAaTocKBQmNIvcMfXs0bMf_xn6fQ
+
     if etab.data_layout == 'NCHW' or len(keras_layer.input_shape) < 4:
+        # 进入
+        # 1.
+        # since etab.data_layout == 'NCHW' == True!
+        # but len(keras_layer.input_shape) == 4, so this is False!
+
         axis = 1
     else:
         axis = 3
@@ -625,19 +959,76 @@ def _convert_batchnorm(inexpr, keras_layer, etab):
               'center': False,
               'epsilon': keras_layer.epsilon,
               'axis': axis}
+    # 1.
+    # params value:
+    # {'scale': False, 'center': False, 'epsilon': 1.001e-05, 'axis': 1}
+
     idx = 0
     if keras_layer.scale:
+        # 进入!
         params['scale'] = True
         gamma = keras_layer.get_weights()[idx]
+        # 1.
+        # idx=0
+
+        # 2.
+        # gamma type:
+        # ndarray
+
+        # 2.1
+        # gamma shape:
+        # (64,)
+
+        # 2.2
+        # gamma value:
+        # https://gist.github.com/shizukanaskytree/d0d99cdcc017dfb9a09997cb6d34ffa1
+
         params['gamma'] = etab.new_const(gamma)
         idx += 1
+        # 1.
+        # idx=1
     if keras_layer.center:
+        # 进入!
         params['center'] = True
         beta = keras_layer.get_weights()[idx]
+        # 1.
+        # idx=1
+
+        # 2.
+        # beta
+        # - type: ndarray;
+        # - shape: (64,);
+        # - value: https://gist.github.com/shizukanaskytree/d0d99cdcc017dfb9a09997cb6d34ffa1#gistcomment-3340782
+
         params['beta'] = etab.new_const(beta)
+        # 1.
+        # # python/tvm/relay/frontend/common.py ↓
+        # class ExprTable(object):
+        #   def new_const(self, value, shape=None, dtype="float32"):
+
         idx += 1
+        # 1.
+        # idx=2
+
     moving_mean = keras_layer.get_weights()[idx]
+    # 1.
+    # moving_mean
+    # - type: ndarray;
+    # - shape: (64,);
+    # - value: not interested.
+
+    # 2.
+    # idx=2
+
     moving_var = keras_layer.get_weights()[idx + 1]
+    # 1.
+    # - type: ndarray;
+    # - shape: (64,);
+    # - value: not interested.
+
+    # 2.
+    # idx+1 == 3
+
     params['moving_mean'] = etab.new_const(moving_mean)
     params['moving_var'] = etab.new_const(moving_var)
     # in case beta or gamma is not defined
@@ -650,9 +1041,49 @@ def _convert_batchnorm(inexpr, keras_layer, etab):
 
 
 def _convert_padding(inexpr, keras_layer, etab):
+  # 1.
+  # called from :
+  # # python/tvm/relay/frontend/keras.py ↓
+  # outs = _convert_map[op_name](inexpr, keras_layer, etab)
+
+  # 2.
+  # arguments:
+  # https://gist.github.com/shizukanaskytree/dde75d6f313950042f6ee6e2ab136198#file-out_head_1500-log-L389-L398
+
+  # 3.
+  # called/used by "ZeroPadding2D" in _convert_map dict.
+
     _check_data_format(keras_layer)
+    # 1.
+    # tvm/python/tvm/relay/frontend/keras.py:34: def _check_data_format(keras_layer)
+    # 一句话:
+    # 本代码不支持 NCHW ❌ 只支持 NHWC ✅
+
     padding_type = type(keras_layer).__name__
+    # 1.
+    # keras_layer value:
+    # <tensorflow.python.keras.layers.convolutional.ZeroPadding2D object at 0x7f37df479630>
+
+    # 2.
+    # type(keras_layer) value:
+    # <class 'tensorflow.python.keras.layers.convolutional.ZeroPadding2D'>
+    #
+    # 2.1
+    # within <class 'tensorflow.python.keras.layers.convolutional.ZeroPadding2D'>
+    # https://keep.google.com/u/1/#NOTE/19JTtSTw1zMua59CW6zNKN2Yn5vCZ2G7W_G5jFJks2uJKMNeNcQUvnxA8SQfizQ
+
+    # 3.
+    # 看到了没, 一个是 object 一个就是 type 了.
+
+    # 4.
+    # padding_type value:
+    # 'ZeroPadding2D'
+
     padding = keras_layer.padding
+    # 1.
+    # padding value:
+    # ((3, 3), (3, 3))
+
     top = left = bottom = right = 0
     if padding_type == 'ZeroPadding2D':
         if isinstance(padding, int):
@@ -662,6 +1093,8 @@ def _convert_padding(inexpr, keras_layer, etab):
                 top, left = padding
                 bottom, right = padding
             elif isinstance(padding[0], tuple):
+                # 1.
+                # 最后进的是这个分支!!! 其他的不用看了!
                 top, bottom = padding[0]
                 left, right = padding[1]
             else:
@@ -675,9 +1108,27 @@ def _convert_padding(inexpr, keras_layer, etab):
     else:
         msg = 'Operator {} is not supported in frontend Keras.'
         raise tvm.error.OpNotImplemented(msg.format(padding_type))
+
     if etab.data_layout == 'NCHW':
+        # 1.
+        # 最后进的是这个分支!!! 其他的不用看了!
         return _op.nn.pad(data=inexpr, pad_width=((0, 0), (0, 0), (top, bottom), (left, right)))
+        # 1.
+        # inexpr value:
+        # {Var} free_var %input_1: Tensor[(1, 3, 224, 224), float32]\n%input_1
+
+        # 2.
+        # _op.nn.pad 在哪里?
+        # 转入 tvm/relay/op/nn/nn.py
+        # def pad(data,
+        #         pad_width,
+        #         pad_value=0.0,
+        #         pad_mode='constant'):
+        # 截图课看具体值: https://keep.google.com/u/1/#NOTE/1MAhNFAkoTjiTasbWUKnJG7QS_dpxPJshSSjGjwGY5cnk4sbMpfxUURKUOYN9
+
     return _op.nn.pad(data=inexpr, pad_width=((0, 0), (top, bottom), (left, right), (0, 0)))
+    # 1.
+    # 不看, 没进入
 
 def _convert_padding3d(inexpr, keras_layer, etab):
     _check_data_format(keras_layer)
@@ -853,40 +1304,68 @@ def _default_skip(inexpr, keras_layer, _): # pylint: disable=unused-argument
     """Layers that can be skipped because they are train time only."""
     return inexpr
 
-
+# 1.
+# ResNet50 Keras model notations:
+# - 📝 TODO;
+# - 🙅 Not appear; 自己写 Keras 网络测试吧~
+# - ✅ Done!;
+# - 👀 Have read but not step debug.
 _convert_map = {
-    'Dense'                    : _convert_dense,
-    'Activation'               : _convert_activation,
-    'Softmax'                  : _convert_advanced_activation,
-    'ReLU'                     : _convert_advanced_activation,
-    'LeakyReLU'                : _convert_advanced_activation,
-    'PReLU'                    : _convert_advanced_activation,
-    'ELU'                      : _convert_advanced_activation,
-    'ThresholdedReLU'          : _convert_advanced_activation,
+    'Dense'                    : _convert_dense, # 📝
+    'Activation'               : _convert_activation, # ✅ + 👀
+    'Softmax'                  : _convert_advanced_activation, # 📝 🙅‍♂️
+    'ReLU'                     : _convert_advanced_activation, # 📝
+    'LeakyReLU'                : _convert_advanced_activation, # 📝 🙅
+    'PReLU'                    : _convert_advanced_activation, # 📝 🙅
+    'ELU'                      : _convert_advanced_activation, # 📝 🙅
+    'ThresholdedReLU'          : _convert_advanced_activation, # 📝 🙅
 
-    'AveragePooling2D'         : _convert_pooling,
-    'MaxPooling2D'             : _convert_pooling,
-    'GlobalAveragePooling2D'   : _convert_pooling,
-    'GlobalMaxPooling2D'       : _convert_pooling,
-    'Conv2D'                   : _convert_convolution,
-    'Conv2DTranspose'          : _convert_convolution,
-    'DepthwiseConv2D'          : _convert_convolution,
-    'SeparableConv2D'          : _convert_separable_convolution,
+    'AveragePooling2D'         : _convert_pooling, # 📝 🙅
+    'MaxPooling2D'             : _convert_pooling, # 📝
+    'GlobalAveragePooling2D'   : _convert_pooling, # 📝
+    'GlobalMaxPooling2D'       : _convert_pooling, # 📝
+    'Conv2D'                   : _convert_convolution, # ✅
+    'Conv2DTranspose'          : _convert_convolution, # ✅
+    'DepthwiseConv2D'          : _convert_convolution, # ✅
+    # 1.
+    # What is Depthwise Conv2d?
+    # see:
+    # - Part 1 — Depthwise Convolution:
+    # - Video 1: Iterating 3 kernels through a 3 channel image
+    # - Image 6: Depthwise convolution, uses 3 kernels to transform a 12x12x3 image to a 8x8x3 image
+    # A Basic Introduction to Separable Convolutions
+    # - https://towardsdatascience.com/a-basic-introduction-to-separable-convolutions-b99ec3102728#:~:text=The%20depthwise%20separable%20convolution%20is,image%20may%20have%20multiple%20channels.
+    # comment: 说穿了不值钱系列.
+
+    'SeparableConv2D'          : _convert_separable_convolution, # 📝 🙅
 
     'Flatten'                  : _convert_flatten,
     'Reshape'                  : _convert_reshape,
     'Concatenate'              : _convert_concat,
-    'BatchNormalization'       : _convert_batchnorm,
+    'BatchNormalization'       : _convert_batchnorm, # ✅
 
     # Specific tf.Keras terminology for batch normalization
-    'BatchNormalizationV1'     : _convert_batchnorm,
+    'BatchNormalizationV1'     : _convert_batchnorm, # ✅
 
-    'Add'                      : _convert_merge,
-    'Subtract'                 : _convert_merge,
-    'Multiply'                 : _convert_merge,
-    'ZeroPadding2D'            : _convert_padding,
-    'UpSampling2D'             : _convert_upsample,
-    'Cropping2D'               : _convert_cropping,
+    'Add'                      : _convert_merge, # 📝
+    'Subtract'                 : _convert_merge, # 📝 🙅
+    'Multiply'                 : _convert_merge, # 📝 🙅
+    'ZeroPadding2D'            : _convert_padding, # ✅
+    # 1.
+    # tf ZeroPadding2D API: (一看就懂)
+    # https://www.tensorflow.org/api_docs/python/tf/keras/layers/ZeroPadding2D
+    # https://www.tensorflow.org/tutorials/generative/pix2pix#build_the_discriminator
+
+    'UpSampling2D'             : _convert_upsample, # 📝 🙅
+    # 1.
+    # keras UpSampling2D
+    # 自己来找例子跑啦
+    # https://www.tensorflow.org/api_docs/python/tf/keras/layers/UpSampling2D
+
+    'Cropping2D'               : _convert_cropping, # 📝 🙅
+    # 1.
+    # keras Cropping2D
+    # https://www.tensorflow.org/api_docs/python/tf/keras/layers/Cropping2D
 
     # 'ZeroPadding1D'          : _convert_padding,
     # 'AveragePooling1D'       : _convert_pooling,
@@ -960,15 +1439,118 @@ def keras_op_to_relay(inexpr, keras_layer, outname, etab):
     etab : relay.frontend.common.ExprTable
         The global expression table to be updated.
     """
+    # 1.
+    # - inexpr=inexpr
+    # - keras_layer=keras_layer
+    # - outname=keras_layer.name + ':' + str(node_idx)
+    # - etab=etab
+    # 上述打印的例子在:
+    # https://gist.github.com/shizukanaskytree/dde75d6f313950042f6ee6e2ab136198
+
     op_name = type(keras_layer).__name__
+    # 1.
+    #
     if op_name not in _convert_map:
         raise tvm.error.OpNotImplemented(
             'Operator {} is not supported for frontend Keras.'.format(op_name))
     outs = _convert_map[op_name](inexpr, keras_layer, etab)
+    # 1.
+    # keras 的 _convert_map:
+    # https://gist.github.com/shizukanaskytree/2886a73e13c82e1b44cc47aece2fa5d4
+
+    # 2.
+    # tf 的 _convert_map:
+    # https://gist.github.com/shizukanaskytree/e0cf51f60dae7e28aa6c159f3a7110ce
+
+    # 3.
+    # 1. vs 2. : 两者的实现不太一样.
+
+    # 4.
+    # inexpr : inline expression
+    # https://gist.github.com/shizukanaskytree/dde75d6f313950042f6ee6e2ab136198
+    # 上文中的 %1 这样的的式子.
+
+    # 5.
+    # outs value:
+    # [CallNode(Op(nn.pad), [Var(input_1, ty=TensorType([1, 3, 224, 224], float32))], relay.attrs.PadAttrs(0x55c36734d878), [])]
+
+    # 6.
+    # relu case:
+    # conv1_relu (Activation)         (None, 112, 112, 64) 0           conv1_bn[0][0]
+    # https://gist.github.com/shizukanaskytree/9b37765afb024c948f3714b8a629d7a5#file-expression_table_names-log-L44
+    # so, go to _convert_activation
+
+    # 6.1
+    # 那时的结果是:
+    # https://gist.github.com/shizukanaskytree/735e0c30df0dbc58e55d7deeef309041
+    # - nn.relu(%4)
+
     outs = _as_list(outs)
+    # 1.
+    # make outs (intput) as list type
+
+    # 2.
+    # outs type:
+    # list
+
+    # 3.
+    # outs value example:
+    # https://gist.github.com/shizukanaskytree/bc1a1247072defbd3cd4c1cebe5cdd17
+
+    # 4.
+    # relu outs after _as_list():
+    # https://gist.github.com/shizukanaskytree/890d8365c63eba2100e5032d20b0d667
+    # https://gist.github.com/shizukanaskytree/735e0c30df0dbc58e55d7deeef309041
+
+    # 4.1
+    # 宏观上说其实就是 [CallNode()]
+
     for t_idx, out in enumerate(outs):
+        # 1.
+        # 对于这个 for outs 的款项, 结果参考:
+        # all result: https://gist.github.com/shizukanaskytree/9b37765afb024c948f3714b8a629d7a5#file-expression_table_names-log-L44
+        # relu result: https://gist.github.com/shizukanaskytree/9b37765afb024c948f3714b8a629d7a5#file-expression_table_names-log-L457-L458
+        #
+        # print code: https://gist.github.com/shizukanaskytree/9b37765afb024c948f3714b8a629d7a5#gistcomment-3340971
+
+        # 2.
+        # comment: 奇怪的是只进来一次, 可是那个 outs 是个 nested list , 好多层!
+        # https://gist.github.com/shizukanaskytree/890d8365c63eba2100e5032d20b0d667
+
+        # 3.
+        # relu out value:
+        # https://gist.github.com/shizukanaskytree/4a7f59319bb831006a0feb4b25b039f2#file-etable_name_out-log-L493-L506
+
         name = outname + ":" + str(t_idx)
         etab.set_expr(name, out)
+        # 1.
+        # name value:
+        # 'conv1_pad:0:0'
+
+        # 2.
+        # out value:
+        # free_var %input_1: Tensor[(1, 3, 224, 224), float32]
+        # nn.pad(%input_1, pad_width=[[0, 0], [0, 0], [3, 3], [3, 3]])
+
+        # 2.1
+        # out type:
+        # Call
+
+        # 3.
+        # etab : relay.frontend.common.ExprTable
+        # The global expression table to be updated.
+
+        # 4.
+        # # python/tvm/relay/frontend/common.py:296 ↓
+        # def set_expr(self, name, expr, force_override=False):
+
+        # 5.
+        # ✅ 部分的 (name, out) logging:
+        # https://gist.github.com/shizukanaskytree/4a7f59319bb831006a0feb4b25b039f2
+
+        # 6.
+        # all name logging:
+        # https://gist.github.com/shizukanaskytree/9b37765afb024c948f3714b8a629d7a5
 
 
 def from_keras(model, shape=None, layout='NCHW'):
@@ -995,15 +1577,63 @@ def from_keras(model, shape=None, layout='NCHW'):
     params : dict of str to tvm.nd.NDArray
         The parameter dict to be used by Relay.
     """
+    # 1.
+    # 使用的 code: go to tutorials/frontend/from_tf_keras.py
+    # shape_dict = {'input_1': data.shape}
+    # mod, params = relay.frontend.from_keras(keras_resnet50, shape_dict)
+
+    # 2.
+    # 参数实例化
+    # 2.1
+    # keras_resnet50: from tensorflow.keras.applications.resnet50 import ResNet50
+
+    # 2.2
+    # shape_dict:
+    # {'input_1': (1, 3, 224, 224)}
+
     def _check_model_is_tf_keras():
         return type(model).__module__.startswith("tensorflow.python.keras")
 
     def _convert_input_layer(keras_layer):
         input_name = keras_layer.name
+        # 1.
+        # input_name value:
+        # input_name: 'input_1'
+
         input_shape = shape[input_name] if shape is not None and input_name in shape else None
+        # 1.
+        # shape value:
+        # {'input_1': (1, 3, 224, 224)}
+
+        # 2.
+        # input_shape value:
+        # {tuple: 4} (1,3,224,224)
+
         etab.set_expr(input_name, new_var(input_name, shape=input_shape))
+        # 1.
+        # etab : relay.frontend.common.ExprTable
+        #   The global expression table to be updated.
+
+        # 2.
+        # new_var(input_name, shape=input_shape) 是什么???
+        # 函数来自 python/tvm/relay/frontend/common.py : new_var method
+        #
+        # 2.1
+        # python/tvm/relay/expr.py : 里面描述如下
+        # Create a new tvm.relay.Var.
+        # This is a simple wrapper function that allows specify
+        # shape and dtype directly.
+
+        # TODO
+        # Get input_name and input_shape. 然后传给 etab.set_expr 这个函数.
+
+        # 3.
+        # Q: 如果说研究存在 "input_1" 呢?
+        # https://keep.google.com/u/1/#NOTE/1Cx0CMsEHbxyMk-p_Vy8lXuTIBGQgqzFXEJO8NCeuw8UqggRyUEObdJ9HSH_a
 
     is_tf_keras = _check_model_is_tf_keras()
+    # 1.
+    # is_tf_keras: True
 
     if not is_tf_keras:
         # Importing from Keras
@@ -1026,23 +1656,124 @@ def from_keras(model, shape=None, layout='NCHW'):
         expected_model_class = tf_keras.models.Model
         input_layer_class = tf_keras.layers.InputLayer
 
+
     assert isinstance(model, expected_model_class)
 
     etab = ExprTable()
+    # 1.
+    # ExprTable() 是什么?
+    #
+    # etab: <tvm.relay.frontend.common.ExprTable object at 0x7f5fa47011d0>
+
     # Set global data format.
     assert layout in ['NCHW', 'NHWC', 'NDHWC'], "Layout must be one of 'NCHW', NHWC or NDHWC"
     etab.data_layout = layout
-    for keras_layer in model.layers:
+    # 1.
+    # tutorials/frontend/from_tf_keras.py 为例
+    # layout: NCHW
+    # 具体说: (1, 3, 224, 224)
+
+    # 1.
+    # 思路解析:
+    """
+    # python/tvm/relay/frontend/keras.py ↓
+    def from_keras(model, shape=None, layout='NCHW'):
+      etab = ExprTable()
+      etab.data_layout = layout # TODO in MCNN
+      # 思想是 BFS + DFS 遍历了所有的 layers! 单枝 DFS, 枝于枝之间的关系是 BFS.
+      # 打印的结果: https://gist.github.com/shizukanaskytree/49de0b984c334f8194a68a7e663eb6aa
+      # keras model structure graph: https://keep.google.com/u/1/#NOTE/1WTmNAaAFVvzakTZSLQyXOC5ax9ohh2xZMIGuaIZsppvImTzVxl5rffix17jwhw
+      for keras_layer in model.layers:
         if isinstance(keras_layer, input_layer_class):
+          _convert_input_layer(keras_layer)
+        else:
+          for node_idx, node in enumerate(inbound_nodes):
+            # for..for..for.. 示意图: https://keep.google.com/u/1/#NOTE/1jhfha871akDCWXNKb5q-5W9yY9lOvY-Wb6HXs4P6LmInYzwoUN5gLzPvFxSK
+            # 遍历每层 layer 的每个 inbound nodes , 然后是 inbound nodes 的每个 inbound layers
+            # **思想是 BFS 遍历了所有的 layers!**
+            for n_idx, t_idx, inbound_layer in zip_node:
+              if isinstance(inbound_layer, input_layer_class):
+                _convert_input_layer(inbound_layer)
+              else:
+                expr_name = inbound_layer.name + ':' + str(n_idx) + ':' + str(t_idx)
+            keras_op_to_relay(inexpr, keras_layer, keras_layer.name + ':' + str(node_idx), etab)
+    """
+    # https://gist.github.com/shizukanaskytree/49de0b984c334f8194a68a7e663eb6aa
+
+    for keras_layer in model.layers:
+        # 1.
+        # model.layers 具体是?
+        # https://keep.google.com/u/1/#NOTE/1TcPjarIMAxnvAS4_fTmIrhPzox4I0rPfB6IiJVDKlewHjGtcu0hkCpEQAEidyQ
+        #
+        # 1.1
+        # model.layers 具体是? you can copy now !
+        # https://gist.github.com/shizukanaskytree/ad09440b0a0c5904b9758114d3a76eff
+        # -
+        # - tensorflow.python.keras.engine.input_layer.InputLayer
+        # - tensorflow.python.keras.layers.convolutional.ZeroPadding2D
+        # - tensorflow.python.keras.layers.convolutional.Conv2D
+        # - tensorflow.python.keras.layers.normalization_v2.BatchNormalization
+        # - tensorflow.python.keras.layers.core.Activation
+        # - tensorflow.python.keras.layers.pooling.MaxPooling2D
+
+
+        # 2.
+        # 实例记录
+        #
+        # keras_layer 其中一个 Conv2D layer 的实例
+        # <tensorflow.python.keras.layers.convolutional.Conv2D object at 0x7f5ffd447b38>
+
+        if isinstance(keras_layer, input_layer_class):
+            # 第一次 的 for 是进入的, 想想也是.
+
+            # 1.
+            # input_layer_class == tf_keras.layers.InputLayer
+
+            # 2.
+            # tf_keras.layers.InputLayer 了解下?
+            # https://www.tensorflow.org/api_docs/python/tf/keras/layers/InputLayer
+            # 点进入看哦.
+
             _convert_input_layer(keras_layer)
         else:
             inbound_nodes = keras_layer.inbound_nodes if hasattr(keras_layer, 'inbound_nodes') \
                        else keras_layer._inbound_nodes if hasattr(keras_layer, '_inbound_nodes') \
                        else None
+            # 1.
+            # keras_layer.inbound_nodes 是什么类型? [list]
+            # list of "tensorflow.python.keras.engine.node.Node object"
+            # 实际打印出来:
+            # [<tensorflow.python.keras.engine.node.Node object at 0x7fbac8808978>]
+
+            # 2.
+            # tensorflow.python.keras.engine.node.Node 说明:
+            # * tf code:
+            # - https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/keras/engine/node.py
+
+            # 3.
+            # inbound 含义是:
+            # travelling towards a place rather than leaving it 到达的；入境的
+            # travelling towards a particular point
+            # 到达的；入境的；归航的；回程的
+            # [ADJ 形容词] 归航的;入站的；An inbound flight is one that is arriving from another place. [usu ADJ n]
+
+            # 3.1
+            # keras_layer.inbound_nodes 是什么? 图示概念!
+            # https://keep.google.com/u/1/#NOTE/1_vGdKUD253w2AYMV5Sw8WnlcLyKSu_PBRVHb4f_rzuHeDaU9Gh4FL7gSh6Iqjg
+
             if inbound_nodes is None:
                 raise TypeError("Unknown layer type or unsupported Keras version : {}"
                                 .format(keras_layer))
             for node_idx, node in enumerate(inbound_nodes):
+                # 1.
+                # enumerate(inbound_nodes):
+                # enumerate(list):
+                # The enumerate() method adds counter to an iterable and returns it.
+
+                # 2.
+                # node type:
+                # tensorflow.python.keras.engine.node.Node
+
                 # If some nodes in imported model are not relevant to the current model,
                 # skip such layers.
                 # - In Keras, model._network_nodes contains keys of all nodes relevant to the
@@ -1052,6 +1783,14 @@ def from_keras(model, shape=None, layout='NCHW'):
                    not model._node_key(keras_layer, node_idx) in model._network_nodes:
                     continue
                 inexpr = []
+                # 1.
+                # inexpr: inline expressions 的意思吧.
+                # IR 相关的.
+
+                # 2.
+                # inexpr 是干嘛的?
+                # A: 如下: inexpr.append(expr)
+
                 # Since Keras allows creating multiple layers from the same name instance,
                 # we append node index to the expr name to make it unique.
                 # The one exception is InputLayer. Changing input variable names after conversion
@@ -1061,17 +1800,154 @@ def from_keras(model, shape=None, layout='NCHW'):
                     _as_list(node.node_indices),
                     _as_list(node.tensor_indices),
                     _as_list(node.inbound_layers))
+                # 1.
+                # node type here is:
+                # tensorflow.python.keras.engine.node.Node
+                #
+                # 说明:
+                # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/keras/engine/node.py
+
+                # 2.
+                # node.node_indices type type and value:
+                # https://keep.google.com/u/1/#NOTE/1W4cv735HI464bd0v8fZc-vCgTAkkgk8H_oqKTn4zMLbRsyPDVcTmnkp53niEyw
+                # type: int
+                # value: 0
+
+                # 3.
+                # node.tensor_indices type and value:
+                # type: int
+                # value: 0
+
+                # 4.
+                # node.inbound_layers type and value:
+                # inbound_layers = {InputLayer}
+                # 截图:
+                # https://keep.google.com/u/1/#NOTE/1yHi6ttM8ydy2ivH4hpnAoxyt2vUPAWtiayRQoyvnZ1gPdFarAW32MJjCInnd
+
+                # 5.
+                # 起初我找不到上述的几个变量, 原来他们都是
+                # @property
+                # def def inbound_layers(self):
+
+                # 6.
+                # node_indices 我确实找不到, 搜 tf repo 的代码也搜不到.
+                # Node 的所有 member 都在下图中了:
+                # https://keep.google.com/u/1/#NOTE/1Tf6UcZUcWxqaTEWzVpNg1H9mOUmZSSaRQIQGZPgSRh78Opw9mWNUM1MBu8j9
+
+                # 6.1
+                # node_indices 我确实找不到的 原因:
+                # 可能老版本里面是显示地写的:
+                # * https://blog.ddlee.cn/posts/4943e1b8/
+                # * http://wangbn.blogspot.com/2018/12/keras-node.html
+                #
+                # 新版本内的都模糊指代了:
+                # "call_args=None, call_kwargs=None"
+                # complete:
+                # class Node:
+                #   def __init__(self, layer, call_args=None, call_kwargs=None, outputs=None)
+
+                # 7.
+                # Node, Layer 的关系和说明:
+                # * [源码笔记]keras源码分析之Layer、Tensor和Node
+                # * https://blog.ddlee.cn/posts/4943e1b8/
+                #
+                # * Keras源码分析(6)：Node
+                # * http://wangbn.blogspot.com/2018/12/keras-node.html
+                #
+                # * Understanding Keras model architecture (node index of nested model)
+                # * https://stackoverflow.com/questions/46011749/understanding-keras-model-architecture-node-index-of-nested-model
+                #
+                # * Keras The Functional API and how to plot keras model.
+                # * https://keras.io/guides/functional_api/
+                #
+                # Node, Layer 的关系和说明 示意图:
+                # https://keep.google.com/u/1/#NOTE/1jhfha871akDCWXNKb5q-5W9yY9lOvY-Wb6HXs4P6LmInYzwoUN5gLzPvFxSK
+
                 for n_idx, t_idx, inbound_layer in zip_node:
                     if isinstance(inbound_layer, input_layer_class):
+                        # 1.
+                        # input_layer_class type ?
+                        # {type} <class tensorflow.python.keras.engine.input_layer.InputLayer'>
+
                         expr_name = inbound_layer.name
+                        # 1.
+                        # inbound_layer.name value?
+                        # "input_1"
+
                         _convert_input_layer(inbound_layer)
+                        # 1.
+                        # inbound_layer type:
+                        # {type} <class tensorflow.python.keras.engine.input_layer.InputLayer'>
+
+                        # 2.
+                        # _convert_input_layer function:
+                        # 在用此之前, 已经有了 "input_1" 层了:
+                        # https://keep.google.com/u/1/#NOTE/1Cx0CMsEHbxyMk-p_Vy8lXuTIBGQgqzFXEJO8NCeuw8UqggRyUEObdJ9HSH_a
+
                     else:
                         expr_name = inbound_layer.name + ':' + str(n_idx) + ':' + str(t_idx)
+                        # 1.
+                        # 打印的 expr_name log
+                        # https://gist.github.com/shizukanaskytree/7941abc40cd289f049916dd0f856d759
+
                     expr = etab.get_expr(expr_name)
+                    # 1.
+                    # etab type:
+                    #
+
+                    # 2.
+                    # expr 对于 "input_1" 来说
+                    #   free_var %input_1: Tensor[(1, 3, 224, 224), float32]\n%input_1
+                    # 对于 "input_1" 来说, 其实例化的值是如下图
+                    # https://keep.google.com/u/1/#NOTE/1aNB8_pIvwH2Aj20fYdhBxu_ICR72JWwaFzyjURUVlMAWgTMC0H-mT4hWUKzv
+
+                    # 2.1
+                    # free_var
+                    # https://docs.tvm.ai/api/python/relay/analysis.html
+
                     inexpr.append(expr)
+                    # 1.
+                    # inexpr: inline expressions 的意思吧.
+
                 if len(inexpr) == 1:
                     inexpr = inexpr[0]
+
                 keras_op_to_relay(inexpr, keras_layer, keras_layer.name + ':' + str(node_idx), etab)
+                # 1.
+                # keras_op_to_relay 函数说明:
+                #
+                # # python/tvm/relay/frontend/keras.py ↓
+                # def keras_op_to_relay(inexpr, keras_layer, outname, etab):
+                #     """Convert a Keras layer to a Relay expression and update the expression table.
+
+                # 2.
+                # print('\t', '↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓ ')
+                # print('\t', 'inexpr: \n', inexpr)
+                # print('\t', '↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ↑ ')
+                # print('\t', 'keras_layer.name:node_idx', keras_layer.name + ':' + str(node_idx))
+                # print('\t', 'etab: ', etab)
+                #
+                # 对 传入 keras_op_to_relay 的参数比较好奇具体是什么, 如下是打印的:
+                # https://gist.github.com/shizukanaskytree/dde75d6f313950042f6ee6e2ab136198
+
+                # 2.1
+                # 打印的函数是怎么实现的? 为什么就打印成那个样子呢?
+                """
+                // src/printer/relay_text_printer.cc:278 ↓
+                Doc RelayTextPrinter::PrintExpr(const Expr& expr, bool meta, bool try_inline) {
+                  Doc printed_expr;
+                  // Printer to print out the IR text format that can be parsed by a parser.
+                	if (expr.as<VarNode>()) {
+                		// This is our first time visiting the var and we hit the VarNode case
+                		// in the visitor. Thus the variable is free.
+                		doc_stack_.back() << "free_var " << printed_expr << Doc::NewLine();
+                		// Memoization is done in AllocVar.
+                		return memo_[expr];
+                	}
+                }
+                """
+                #
+
     # model._output_coordinates contains out_node(oc[0]), node_index(oc[1]) and tensor_index(oc[2])
     # Get all output nodes in etab using the name made from above values.
     # The out exprs were added to etab in keras_op_to_relay using this name.

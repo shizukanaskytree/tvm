@@ -422,6 +422,19 @@ def var(name_hint,
         type_annotation=None,
         shape=None,
         dtype="float32"):
+    # 1.
+    # 实例化:
+    # https://keep.google.com/u/1/#NOTE/1GaRV0-r0_rk07qkIZne_onITYUvhc53mGZb_Ck6UwcGxrLJgkRW9Cm6F2QUo
+
+    # 2.
+    # callstack example:
+    #
+    # var, expr.py:464
+    # new_var, python/tvm/relay/frontend/common.py:557
+    # _convert_input_layer, relay/frontend/keras.py:1004
+    # from_keras, relay/frontend/keras.py:1037
+    # <module>, from_keras.py:90
+
     """Create a new tvm.relay.Var.
 
     This is a simple wrapper function that allows specify
@@ -461,10 +474,25 @@ def var(name_hint,
     if type_annotation is not None and shape is not None:
         raise ValueError("Can only specify either type_annotation or shape.")
     if shape is not None:
+        # 1.
+        # 对于这个实例: # https://keep.google.com/u/1/#NOTE/1GaRV0-r0_rk07qkIZne_onITYUvhc53mGZb_Ck6UwcGxrLJgkRW9Cm6F2QUo
+        # 进入这个分支
+
         type_annotation = _ty.TensorType(shape, dtype)
+        # 1.
+        # _ty.TensorType 最后是在 如下 实现的:
+        # python/tvm/ir/tensor_type.py
+
     elif isinstance(type_annotation, str):
         type_annotation = _ty.TensorType((), type_annotation)
     return Var(name_hint, type_annotation)
+    # 1.
+    # Var 在本文件中, 其类型是:
+    # class Var(ExprWithOp)
+    # A local variable in Relay.
+
+    # 2.
+    # 这个函数的 Description 是 Create a new tvm.relay.Var. 以上!
 
 
 def const(value, dtype=None):

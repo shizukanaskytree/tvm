@@ -127,6 +127,38 @@ def conv2d(data,
            kernel_layout="OIHW",
            out_layout="",
            out_dtype=""):
+    # 1.
+    # 参数 values:
+    # https://keep.google.com/u/1/#NOTE/1yHElvcYf8xtRcNM5Pk6ZNHdiEzjsF2QcdlDTwyxC6KsapbD_NzGepQqlPkg1wQ
+
+    # 2.
+    # data : tvm.relay.Expr
+    #     The input data to the operator.
+
+    # 2.1
+    # data type:
+    #   Call, <class 'tvm.relay.expr.Call'>
+    #   complete: https://keep.google.com/u/1/#NOTE/1d7yRJdgIlYFgZAZaEivYIn4LJdWzsIAZH7Gn79PkBNa73qZiT19KBL7EP2eKTQ
+    #
+    # data value:
+    #   free_var %input_1: Tensor[(1, 3, 224, 224), float32]
+    #   nn.pad(%input_1, pad_width=[[0, 0], [0, 0], [3, 3], [3, 3]])
+    #
+    # data is from inexpr from : python/tvm/relay/frontend/keras.py: out = _op.nn.conv2d(data=inexpr, **params)
+    # inexpr value:
+    # https://gist.github.com/shizukanaskytree/dde75d6f313950042f6ee6e2ab136198#file-out_head_1500-log-L405-L407
+
+    # 3.
+    # weight : tvm.relay.Expr
+    #     The weight expressions.
+
+    # 3.1
+    # weight type:
+    #   Var, <class 'tvm.relay.expr.Var'>
+    # weight value:
+    #   free_var %v_param_1: Tensor[(64, 3, 7, 7), float32]
+    #   %v_param_1
+
     r"""2D convolution.
 
     This operator takes the weight as the convolution kernel
@@ -207,7 +239,64 @@ def conv2d(data,
     return _make.conv2d(data, weight, strides, padding, dilation,
                         groups, channels, kernel_size, data_layout,
                         kernel_layout, out_layout, out_dtype)
+    # 1.
+    # arguments screenshot:
+    # https://keep.google.com/u/1/#NOTE/1fwflfgP7lu_soJHHV_c_FCs7jmgmTUeDfcoXIapUMrMojUe3wR3J9MFl5d80
 
+    # 2.
+    # groups = 1, 启用的是默认值.
+
+    # 3.
+    # kernel_layout は?
+    # What is "kernel"? Then, what is kernel_layout?
+    # "kernel" == "filter" since I find that kernel_size=(7,7).
+    # "OIHW"
+
+    # 4.
+    # "OIHW":
+    # depthwise conv 下的 layout.
+    # For NCHW, we always OIHW (from: https://discuss.tvm.ai/t/tf-kernel-layout-hwio-vs-hwoi/3895/6)
+    #
+    # Links:
+    # tensorflow::ops::DepthwiseConv2dNative
+    # - https://www.tensorflow.org/api_docs/cc/class/tensorflow/ops/depthwise-conv2d-native
+    # tf.nn.depthwise_conv2d
+    # - https://www.tensorflow.org/api_docs/python/tf/nn/depthwise_conv2d
+    # [TF] Kernel Layout: HWIO vs. HWOI
+    # - https://discuss.tvm.ai/t/tf-kernel-layout-hwio-vs-hwoi/3895
+
+    # 5.
+    # how to describe a kernel / filter size or shape in convolution deep learning
+    # Deciding optimal kernel size for CNN
+    # - https://towardsdatascience.com/deciding-optimal-filter-size-for-cnns-d6f7b56f9363
+
+    # What does kernel size mean?
+    # - https://stats.stackexchange.com/questions/296679/what-does-kernel-size-mean/339265#339265?newreg=c647d29f90db47dc8586aa162982ebad
+
+    # TVM conv2d API:
+    # - https://docs.tvm.ai/api/python/relay/nn.html#tvm.relay.nn.conv2d
+    # - data_layout='NCHW', kernel_layout='OIHW'
+    # - NCHW: conv2d takes in a data Tensor with shape (batch_size, in_channels, height, width)
+    # - OIHW: "'O', 'I', 'H', 'W' stands for num_filter, input_channel, height, and width"
+    #         from: include/tvm/relay/attrs/nn.h-163
+    #         a weight Tensor with shape (channels, in_channels, kernel_size[0], kernel_size[1])
+    # - 所以这么看下来, "NCHW" 中的 C 就是 "OIHW" 中的 I, 因为它们都是 *i*n_channels, 而且都是四个字母中的二号位.
+    #   我猜 "OIHW" 中的 "O"(channels) 应该是 apply the filter to the input data 后的 output 层的 channels 数. ✅
+    #   示意图的话, 参考这个:
+    #   * [Good Enough!] ResNet Layers: https://towardsdatascience.com/understanding-and-visualizing-resnets-442284831be8
+    #   * How do Convolutional Layers (CNNs) work in keras?: https://stackoverflow.com/questions/54727606/how-do-convolutional-layers-cnns-work-in-keras/54727607#54727607
+    #   * What does kernel size mean?: https://stats.stackexchange.com/questions/296679/what-does-kernel-size-mean/339265#339265?newreg=c647d29f90db47dc8586aa162982ebad
+
+    # code double-check 验证自己的想法:
+    # data_layout kernel_layout corresponding relationship:
+    # https://gist.github.com/shizukanaskytree/ecf125236fc9fd2b5c7b8510b5b45c12
+
+    # TVM conv3d API:
+    # - https://docs.tvm.ai/api/python/relay/nn.html#tvm.relay.nn.conv3d
+    # - data_layout='NCDHW', kernel_layout='OIDHW'
+    # - NCDHW: a data Tensor with shape (batch_size, in_channels, depth, height, width)
+    #          simply put: (N x C x depth x height x width)
+    # - OIDHW: a weight Tensor with shape (channels, in_channels, kernel_size[0], kernel_size[1], kernel_size[2])
 
 def conv3d(data,
            weight,
@@ -1366,7 +1455,14 @@ def pad(data,
     result : tvm.relay.Expr
         The computed result.
     """
+    # 1.
+    # 例子:
+    # # python/tvm/relay/frontend/keras.py ↓
+    # def _convert_padding(inexpr, keras_layer, etab):
+
     return _make.pad(data, pad_width, pad_value, pad_mode)
+    # 1.
+    #
 
 
 def dilate(data, strides):
@@ -1533,6 +1629,15 @@ def batch_norm(data,
                epsilon=1e-5,
                center=True,
                scale=True):
+    # 1.
+    # 2017-Hung-yi-Lee-Batch Normalization
+    # https://www.youtube.com/watch?v=BZh1ltr5Rkg
+
+    # 2.
+    # arguments value:
+    # https://gist.github.com/shizukanaskytree/e820b6723d256c9226e9282e808171a1
+    # https://keep.google.com/u/1/#NOTE/1i8lneR20lZFFdhOce32az1LT4gOHr9b0ustMg0LFnHTJgebAz9DsItHpca3Jvw
+
     r"""
     Batch normalization layer (Ioffe and Szegedy, 2014).
     Normalizes the input at each batch, i.e. applies a transformation

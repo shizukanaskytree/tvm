@@ -81,6 +81,8 @@ plt.show()
 data = np.array(img)[np.newaxis, :].astype('float32')
 data = preprocess_input(data).transpose([0, 3, 1, 2])
 print('input_1', data.shape)
+# 1.
+# console print: input_1 (1, 3, 224, 224)
 
 ######################################################################
 # Compile the model with Relay
@@ -88,6 +90,28 @@ print('input_1', data.shape)
 # convert the keras model(NHWC layout) to Relay format(NCHW layout).
 shape_dict = {'input_1': data.shape}
 mod, params = relay.frontend.from_keras(keras_resnet50, shape_dict)
+# 1.
+# keras_resnet50: from tensorflow.keras.applications.resnet50 import ResNet50
+
+# 2.
+# shape_dict:
+# {'input_1': (1, 3, 224, 224)}
+
+# 3.
+# relay.frontend.from_keras 函数的说明和参数的对应
+# Go to relay/frontend/keras.py, from_keras
+#
+# def from_keras(model, shape=None, layout='NCHW')
+# * Parameters:
+# - model: keras_resnet50
+# - shape: shape_dict
+#
+# * Returns:
+# - mod : tvm.IRModule
+#     The relay module for compilation.
+# - params : dict of str to tvm.nd.NDArray
+#     The parameter dict to be used by Relay.
+
 #mod, params = relay.frontend.from_keras(keras_mobilenetv2, shape_dict)
 # compile the model
 target = 'cuda'

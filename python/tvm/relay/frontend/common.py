@@ -275,6 +275,12 @@ def get_relay_op(op_name):
 
 class ExprTable(object):
     """Table storing Relay expressions by names."""
+    # 1.
+    # 用 emoji 标记一下吧
+
+    # 2.
+    # storing
+
     def __init__(self):
         self.exprs = {}
         self.params = {}
@@ -554,6 +560,13 @@ def new_var(name_hint,
             type_annotation=None,
             shape=None,
             dtype="float32"):
+    # 1.
+    # Description:
+    # Create a new tvm.relay.Var.
+    # 具体是:
+    # class Var(ExprWithOp):
+    # A local variable in Relay.
+
     return _expr.var(name_hint, type_annotation, shape, dtype)
 
 

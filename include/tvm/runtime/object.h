@@ -46,6 +46,11 @@
 
 namespace tvm {
 namespace runtime {
+// 1.
+// cmt:
+// namespace 的取名就是顺着文件夹名字下来的...
+// include/tvm/runtime/object.h
+//        ^^^^^^^^^^^^
 
 /*!
  * \brief Namespace for the list of type index.

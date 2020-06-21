@@ -239,6 +239,12 @@ class TVM_DLL ComputeOpNode : public BaseComputeOpNode {
   }
   static Operation make(std::string name, std::string tag, Map<String, ObjectRef> attrs,
                         Array<IterVar> axis, Array<PrimExpr> body);
+  // 1.
+  // src はどこ？
+  // https://gist.github.com/shizukanaskytree/25d700f6b0236956d2d270a667cfd74b
+
+  // 2.
+  // https://gist.github.com/shizukanaskytree/25d700f6b0236956d2d270a667cfd74b#file-computeopnode-cc-L104
 
   static constexpr const char* _type_key = "ComputeOp";
   TVM_DECLARE_FINAL_OBJECT_INFO(ComputeOpNode, BaseComputeOpNode);

@@ -108,6 +108,11 @@ class Tuner(object):
         si_prefix: str
             One of tvm.autotvm.util.SI_PREFIXES. The SI prefix to use when reporting FLOPS.
         """
+        # 1.
+        # 终于切入正题了!
+        # from: 
+        # https://gist.github.com/shizukanaskytree/d7fedc338f08cb19f9cd2435e8665003#file-tune_simple_template-py-L337
+
         measure_batch = create_measure_batch(self.task, measure_option)
         n_parallel = getattr(measure_batch, 'n_parallel', 1)
         early_stopping = early_stopping or 1e9

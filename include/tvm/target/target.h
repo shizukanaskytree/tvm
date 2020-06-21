@@ -83,6 +83,10 @@ class TargetNode : public Object {
   TVM_DLL std::unordered_set<std::string> libs() const;
 
   static constexpr const char* _type_key = "Target";
+  // 1.
+  // SO: Explain constexpr with const char*const [duplicate]
+  // https://stackoverflow.com/questions/29844028/explain-constexpr-with-const-charconst
+
   TVM_DECLARE_FINAL_OBJECT_INFO(TargetNode, Object);
 
  private:

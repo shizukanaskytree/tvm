@@ -117,12 +117,26 @@ class Task(object):
     """
     def __init__(self, name, args):
         self.name = name
+        # 1.
+        # name value:
+        # 'tutorial/matmul'
+
         self.args = args
+        # 1.
+        # args value:
+        # (512, 512, 512, 'float32')
+
         self.kwargs = {}  # currently unused
 
         # init null config space
         self.config_space = None
         self.func = TASK_TABLE.get(name, _raise_error)
+        # 1.
+        # TASK_TABLE 是什么?
+        # A:
+        # TASK_TABLE = {} # 这就是在本文件内定义的全局变量.
+        # 值:
+        # https://keep.google.com/u/1/#NOTE/1q6uy9Q5BGhHyhO3-p_o-9RrxozNEeSVUIob9BALcU-U9UlhLhHDxa8y9ft5Zfw
 
         # auxiliary info, available after `init_space` is called
         self.flop = None
@@ -212,6 +226,15 @@ class TaskTemplate(object):
             return self._default_func(*args, **kwargs)
         assert callable(self.fcustomized)
         return self.fcustomized(*args, **kwargs)
+        # 1.
+        # self.fcustomized(*args, **kwargs) goto?
+        # https://keep.google.com/u/1/#NOTE/1zVQ3Jpqvh1DEEVnOWWEZxyZvtHANPGKXBiooDa2NTglu1ihsExNwClRq9VxB
+        # 因此也就开始执行 user code.
+        # user code backup:
+        # https://gist.github.com/shizukanaskytree/d7fedc338f08cb19f9cd2435e8665003#file-tune_simple_template-py-L219
+        # - 注意看 te.operation.compute
+        #   python/tvm/te/operation.py
+        #   - https://gist.github.com/shizukanaskytree/d7fedc338f08cb19f9cd2435e8665003#file-tune_simple_template-py-L223
 
     def _default_func(self, *args, **kwargs):
         assert callable(self.fcompute) and callable(self.fschedule)
@@ -398,6 +421,9 @@ def create(task_name, args, target, target_host=None):
         Positional arguments
     target : Target
         The compilation target
+        1.
+        target e.g., 'llvm'
+
     target_host: Target, optional
         The compilation target for host side
 
@@ -410,15 +436,36 @@ def create(task_name, args, target, target_host=None):
     ret = Task(task_name, args)
 
     if isinstance(target, str):
+        # 进入!
         target = _target.create(target)
+        # 1.
+        # target.target.create
+        # tvm/python/tvm/target/target.py 最后一个函数
+
+        # 2.
+        # target
+        # target == 'llvm'
 
     # init config space
     ret.config_space = ConfigSpace()
+    # 1.
+    # Goto:
+    # python/tvm/autotvm/task/space.py
+
+    #
 
     ctx = ApplyConfig(ret.config_space)
     with ctx:
         with target:
             sch, _ = ret.func(*args)
+            # 1.
+            # Goto:
+            # autotvm.task.task.TaskTemplate.__call__
+
+            # 2.
+            # args value:
+            # https://keep.google.com/u/1/#NOTE/1JDo9kQnOZdaMuRCMOfWAynZwDiB9YHms-zXBpvlAyoyrRo9AmhqB7k7ys_ZW
+
             ret.config_space.code_hash = getattr(sch, 'code_hash', None)
 
     ret.flop = ret.config_space.flop or compute_flop(sch)

@@ -91,6 +91,9 @@ def compute(shape, fcompute, name="compute", tag="", attrs=None):
     shape = tuple([int(s) if isinstance(s, float) else s for s in shape])
     ndim = len(shape)
     code = fcompute.__code__
+    # 1.
+    # code value:
+    # <code object <lambda> at 0x7fb2b25279c0, file "/home/wxf/summer2020/py_tvm/auto_tuner/tune_simple_template.py", line 220>
 
     out_ndim = ndim
     if code.co_argcount == 0:
@@ -104,8 +107,13 @@ def compute(shape, fcompute, name="compute", tag="", attrs=None):
 
     dim_var = [tvm.tir.IterVar((0, s), x, 0) for x, s in zip(arg_names, shape[:out_ndim])]
     body = fcompute(*[v.var for v in dim_var])
+    # 1.
+    # body value:
+    # reduce(meta[CommReducer][0], [(@A(i: int32, k: int32, dtype=float32, type="halide", index=0)*@B(k, j: int32, dtype=float32, type="halide", index=0))], [IterVar(k, [0:512], "CommReduce", "")], 0)
+    # // meta data omitted. you can use show_meta_data=True to include meta data
 
     if isinstance(body, _tensor.TensorIntrinCall):
+        # 未进入!
         for i, s in enumerate(shape[out_ndim:]):
             var_name = "ax" + str(i)
             dim_var.append(tvm.tir.IterVar((0, s), var_name, 4))
@@ -119,11 +127,17 @@ def compute(shape, fcompute, name="compute", tag="", attrs=None):
                                            body.regions,
                                            body.scalar_inputs)
     else:
+        # 进入!
         if not isinstance(body, (list, tuple)):
             body = [body]
         body = convert(body)
         op_node = _ffi_api.ComputeOp(
             name, tag, attrs, dim_var, body)
+        # 1.
+        # _ffi_api.ComputeOp 是什么?
+        # ./src/te/operation/compute_op.cc:149:TVM_REGISTER_GLOBAL("te.ComputeOp").set_body_typed(ComputeOpNode::make);
+        # ./include/tvm/te/operation.h:213:class TVM_DLL ComputeOpNode : public BaseComputeOpNode {
+
 
     num = op_node.num_outputs
     outputs = tuple(op_node.output(i) for i in range(num))

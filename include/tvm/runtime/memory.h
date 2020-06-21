@@ -22,12 +22,29 @@
  */
 #ifndef TVM_RUNTIME_MEMORY_H_
 #define TVM_RUNTIME_MEMORY_H_
+// 1.
+// TVM_RUNTIME_MEMORY_H_ 是怎么想到的?
+// A:
+// https://keep.google.com/u/1/#NOTE/1MKRqAyn13ZwZ80uitNEu7mbR4FyrHY36pm0j2Pkazi9zcaWkU5WE4rtT8ugu
+// 域名::域名::文件名::文件 suffix
+// 对应下面的
+//c// namespace tvm {
+//c// namespace runtime {
 
 #include <tvm/runtime/object.h>
+// 这里面提供
+// - class ObjectPtr
 
 #include <cstdlib>
 #include <type_traits>
+// 1.
+// 检查是否是 C++ 里面的某种类型的, 具体见下面的, 说穿了就不值钱系列
+// https://en.cppreference.com/w/cpp/header/type_traits
+
 #include <utility>
+// 1.
+// 怎么想到要用 utility header 的?
+// 好多的功能组件在这个库里提供了啊, 好丰富啊.
 
 namespace tvm {
 namespace runtime {
@@ -39,6 +56,17 @@ namespace runtime {
  */
 template <typename T, typename... Args>
 inline ObjectPtr<T> make_object(Args&&... args);
+// 1.
+// `typename... Arg` 是什么意思? 三点水是?
+// expand if variadic types and args
+// expand to :
+// inline ObjectPtr<T> make_object(Arg1&& arg1, Arg2&& arg2, Arg3&& arg3)
+
+// 2.
+// class ObjectPtr 在
+// include/tvm/runtime/object.h
+
+
 
 // Detail implementations after this
 //

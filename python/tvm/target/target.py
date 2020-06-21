@@ -350,8 +350,27 @@ def create(target_str):
     See the note on :py:mod:`tvm.target` on target string format.
     """
     if isinstance(target_str, Target):
+        # 未进入!
+        # 1.
+        # target_str == 'llvm'
+
+        # 2.
+        # tvm.target.target.Target
+        # 一边是 string, 一边是 Target, 当然不一样了...
         return target_str
+        
     if not isinstance(target_str, str):
         raise ValueError("target_str has to be string type")
 
     return _ffi_api.TargetFromString(target_str)
+    # 1.
+    # _ffi_api.TargetFromString goto where?
+    # A:
+    # goto: python/tvm/_ffi/_ctypes/packed_func.py
+
+    # 2.
+    # ./src/target/target.cc:160:TVM_REGISTER_GLOBAL("target.TargetFromString").set_body([](TVMArgs args, TVMRetValue* ret) {
+
+    # 3.
+    # Return
+    # PackedFunc.__call__() = {Target} llvm

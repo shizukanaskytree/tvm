@@ -36,6 +36,16 @@ ProfileResult = namedtuple("ProfileResult", ["mean", "results"])
 class Module(object):
     """Runtime Module."""
     __slots__ = ["handle", "_entry", "entry_name"]
+    # Description:
+    # __slots__ 是对用户, 对外的接口定义
+    #
+    # QQQ:
+    # What is the use of __ slots __ and when it is useful in Python?
+    # AAA:
+    # In Python, there is no default functionality to allocate a static amount
+    # of memory while creating the object to store all its attributes.
+    # Usage of __slots__ reduce the wastage of space and speed up the program by
+    # allocating space for a fixed amount of attributes.
 
     def __init__(self, handle):
         self.handle = handle

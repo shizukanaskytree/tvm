@@ -53,6 +53,15 @@ TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
  */
 Target CreateTarget(const std::string& target_name, const std::vector<std::string>& options) {
   auto t = make_object<TargetNode>();
+  // 1.
+  // class TargetNode 在哪?
+  // A:
+  // include/tvm/target/target.h:43 定义了 class TargetNode
+  // class TargetNode : public Object
+
+  // 1.1
+  // 如下干的事情就是把信息填充到位, 没有所谓的算法, 说穿了不值钱系列
+
   t->target_name = target_name;
 
   std::string libs_flag = "-libs=";
@@ -217,6 +226,10 @@ std::string GetDeviceName(const std::string& target_str) {
 }
 
 Target Target::Create(const std::string& target_str) {
+  // 1.
+  // value of `target_str`
+  // 'llvm'
+
   if (target_str.length() == 0) {
     LOG(ERROR) << "target_str must not be empty";
   }

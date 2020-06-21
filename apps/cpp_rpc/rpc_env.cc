@@ -201,6 +201,49 @@ void WindowsShared(const std::string& output, const std::vector<std::string>& fi
                    const std::string& options = "", const std::string& cc = "clang") {
   std::string cmd = cc;
   cmd += " -O2 -flto=full -fuse-ld=lld-link -Wl,/EXPORT:__tvm_main__ -shared ";
+  // 1.
+  // -Wl,<arg>,<arg2>...
+  // Pass the comma separated arguments in <arg> to the linker
+  // from:
+  // Clang command line argument reference
+  // https://clang.llvm.org/docs/ClangCommandLineReference.html
+
+  // 2.
+  // 关于 linker entry name 问下, 了解下
+  //
+  // https://sourceware.org/binutils/docs/ld/Entry-Point.html
+
+  // 3.
+  // Google: linker EXPORT
+  // /EXPORT (Exports a Function)
+  // Exports a function by name or ordinal, or data, from your program.
+  // https://docs.microsoft.com/en-us/cpp/build/reference/export-exports-a-function?view=vs-2019
+
+  // 3.1
+  // The /EXPORT option specifies a function or data item to export from your
+  // program so that other programs can call the function or use the data.
+  // Exports are usually defined in a DLL.
+
+  // 4.
+  // How to use the Microsoft Linker /Export parameter:
+  // https://stackoverflow.com/questions/14713419/how-to-use-the-microsoft-linker-export-parameter
+
+  // 5.
+  // -flto=full
+  // you can find it from:
+  // -flto=<arg>
+  // https://clang.llvm.org/docs/ClangCommandLineReference.html
+
+  // 5.1
+  // LTO:
+  // Design Overview of Link time optimization
+  // https://gcc.gnu.org/onlinedocs/gccint/LTO-Overview.html
+
+  // 6.
+  // other options in the above code:
+  // Clang command line argument reference:
+  // https://clang.llvm.org/docs/ClangCommandLineReference.html
+
   cmd += " -o " + output;
   for (const auto& file : files) {
     cmd += " " + file;

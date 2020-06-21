@@ -570,6 +570,10 @@ class ScheduleNode : public Object {
  * \return sch The created Schedule.
  */
 inline Schedule create_schedule(Array<Operation> ops) { return ScheduleNode::make(ops); }
+// 1.
+// ScheduleNode::make from: 
+// src/te/schedule/schedule_lang.cc:629:Schedule ScheduleNode::make(Array<Operation> ops) {
+
 
 /*! \brief node container for IterVar attr */
 class IterVarAttrNode : public Object {

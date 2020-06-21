@@ -55,9 +55,20 @@ def create_schedule(ops):
     sch : schedule.Schedule
         The created schedule.
     """
+    # 1.
+    # invoked from user code
+
     if not isinstance(ops, (list, _container.Array)):
         ops = [ops]
     return _ffi_api.CreateSchedule(ops)
+    # 1.
+    # CreateSchedule from where?
+    # ./src/te/schedule/schedule_lang.cc:813:TVM_REGISTER_GLOBAL("te.CreateSchedule").set_body_typed(create_schedule);
+
+    # 2.
+    # ./include/tvm/te/schedule.h:572:inline Schedule create_schedule(Array<Operation> ops) { return ScheduleNode::make(ops); }
+    # 
+
 
 
 @tvm._ffi.register_object

@@ -16,6 +16,7 @@
 # under the License.
 # pylint: disable=unused-import, redefined-builtin, wildcard-import
 """Namespace for Tensor Expression Language
+# 上次问到你 te 是什么的缩写, 刚巧看到 te: Tensor Expression
 """
 # expose all operators in tvm tir.op
 from tvm.tir import any, all, min_value, max_value, trace

@@ -23,7 +23,7 @@ import traceback
 # top-level alias
 # tvm._ffi
 from ._ffi.base import TVMError, __version__
-from ._ffi.runtime_ctypes import TypeCode, DataType
+from ._ffi.runtime_ctypes import DataTypeCode, DataType
 from ._ffi import register_object, register_func, register_extension, get_global_func
 
 # top-level alias
@@ -56,6 +56,9 @@ from . import testing
 
 # tvm.driver
 from .driver import build, lower
+
+# tvm.parser
+from . import parser
 
 # others
 from . import arith

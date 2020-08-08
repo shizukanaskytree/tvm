@@ -22,6 +22,7 @@ from tvm import te
 from tvm import relay
 from tvm.relay.loops import while_loop
 from tvm.relay.testing import run_infer_type as infer_type
+import tvm.topi.testing
 
 def int32(val):
     return relay.const(val, 'int32')
@@ -183,9 +184,9 @@ def test_any_reshape():
         # Variable newshape only supports that output rank is the same as newshape
         verify_any_reshape(any_dims(3), (1, -1), (2, 3, 4), (1, 24), variable_newshape)
         verify_any_reshape(any_dims(3), (0, -1), (2, 3, 4), (2, 12), variable_newshape)
-        verify_any_reshape(any_dims(3), (-4, 2, -1, -2), (6, 3, 4), (2, 3, 3, 4), variable_newshape)
     verify_any_reshape(any_dims(3), (0, -2), (2, 3, 4), (2, 3, 4))
     verify_any_reshape(any_dims(3), (-4, -1, 2, -3), (6, 3, 4), (3, 2, 12))
+    verify_any_reshape(any_dims(3), (-4, 2, -1, -2), (6, 3, 4), (2, 3, 3, 4))
 
 def verify_any_argwhere(x_shape, x_np_shape, dtype="bool"):
     x = relay.var('x', shape=x_shape, dtype=dtype)
@@ -362,6 +363,7 @@ def test_any_transpose():
     verify_any_transpose(any_dims(3), (1, 0, 2), (10, 3, 2))
     verify_any_transpose(any_dims(3), None, (2, 3, 4))
     verify_any_transpose(any_dims(6), (0, 1, 3, 2, 5, 4), (11, 12, 2, 1, 9, 17))
+    verify_any_transpose(any_dims(2), (-1, 0), (3, 2))
 
 def verify_any_squeeze(data_shape, axis, static_data_shape):
     mod = tvm.IRModule()
@@ -642,6 +644,52 @@ def test_arange_with_dynamic_shape():
         result = ex.evaluate()(data)
         tvm.testing.assert_allclose(result.asnumpy(), np.array(range(10)).astype("int32")+1)
 
+def verify_any_strided_slice(data_shape, begin_shape, end_shape, strides_shape,
+                             data_np_shape, slice_mode="end", const_attrs=False):
+    # Generate random numpy input data
+    np_data = np.random.uniform(size=data_np_shape).astype('float32')
+    np_begin = np.random.randint(2, size=begin_shape, dtype="int32")
+    np_end = np.random.randint(5, 10, size=end_shape, dtype="int32")
+    np_strides = np.random.randint(1, 2 if slice_mode == "size" else 3, size=strides_shape, dtype="int32")
+    # target numpy result
+    ref_res = tvm.topi.testing.strided_slice_python(np_data, np_begin, np_end, np_strides, slice_mode)
+
+    # Relay Module
+    mod = tvm.IRModule()
+    data = relay.var('data', shape=data_shape, dtype='float32')
+    if const_attrs:
+        data = relay.var('data', shape=data_np_shape, dtype='float32')
+        begin = relay.const(np_begin)
+        end = relay.const(np_end)
+        strides = relay.const(np_strides)
+        args = [data]
+        np_inputs = [np_data]
+    else:
+        begin = relay.var('begin', shape=begin_shape, dtype="int32")
+        end = relay.var('end', shape=end_shape, dtype="int32")
+        strides = relay.var('strides', shape=strides_shape, dtype="int32")
+        args = [data, begin, end, strides]
+        np_inputs = [np_data, np_begin, np_end, np_strides]
+
+    y = relay.strided_slice(data, begin=begin, end=end,
+                            strides=strides, slice_mode=slice_mode)
+    mod["main"] = relay.Function(args, y)
+
+    for kind in ["debug", "vm"]:
+        ex = relay.create_executor(kind, mod=mod, ctx=tvm.cpu(), target="llvm")
+        result = ex.evaluate()(*np_inputs)
+        tvm.testing.assert_allclose(result.asnumpy(), ref_res)
+
+
+def test_any_strided_slice():
+    verify_any_strided_slice(any_dims(2), (2,), (2,), (2,), (15, 21))
+    verify_any_strided_slice(any_dims(3), (3,), (3,), (3,), (15, 17, 21))
+    verify_any_strided_slice(any_dims(3), (3,), (3,), (3,), (23, 29, 41))
+    verify_any_strided_slice(any_dims(4), (4,), (4,), (4,), (40, 50, 60, 70))
+    verify_any_strided_slice(any_dims(3), (3,), (3,), (3,), (15, 17, 21), slice_mode="size")
+    verify_any_strided_slice(any_dims(2), (2,), (2,), (2,), (15, 21), const_attrs=True)
+
+
 def test_recursive_concat():
     """
     fn @concat_loop(%i: int32, %st: (any, 1)) -> (any, 1) {
@@ -674,9 +722,7 @@ def test_recursive_concat():
     mod["main"] = func
     data = np.array(0.0, dtype='int32')
     ref = np.array([0] + list(range(10))).reshape((11, 1)).astype("int32")
-    # TODO(@jroesch): After LambdaLift pass, TypeInfer pass will fail
-    # so currently we cannot run this test case on VM
-    for kind in ["debug"]:
+    for kind in ["debug", "vm"]:
         ex = relay.create_executor(kind, mod=mod, ctx=tvm.cpu(), target="llvm")
         result = ex.evaluate()(data)
         np.testing.assert_allclose(result.asnumpy(), ref)
@@ -767,7 +813,83 @@ def test_mixed_input_type():
         ex = relay.create_executor(kind, mod=mod, ctx=tvm.cpu(), target="llvm")
         result = ex.evaluate()([[data_np0, data_np0], data_np0], data_np1)
         assert result.asnumpy().shape == ref_out_shape, \
-            "Shape mismatch: expect %s but got %s." % (str(ref_out_shape), str(ret.asnumpy().shape))
+            "Shape mismatch: expect %s but got %s." % (str(ref_out_shape), str(result.asnumpy().shape))
+
+def verify_any_crop_and_resize(data_shape, boxes_shape, box_indices_shape, crop_size,
+                               layout, static_boxes, static_box_indices_shape, ref_out_shape):
+    mod = tvm.IRModule()
+    dtype = "float32"
+    indices_dtype = "int32"
+    data = relay.var('data', shape=data_shape, dtype=dtype)
+    boxes = relay.var('boxes', shape=boxes_shape, dtype=dtype)
+    box_indices = relay.var('box_indices', shape=box_indices_shape, dtype=indices_dtype)
+    y = relay.image.crop_and_resize(data, boxes, box_indices, crop_size, layout)
+    mod["main"] = relay.Function([data, boxes, box_indices], y)
+    data_np = np.random.uniform(size=data_shape).astype(dtype)
+    boxes_np = np.random.uniform(size=static_boxes).astype(dtype)
+    box_indices_np = np.random.uniform(size=static_box_indices_shape).astype(indices_dtype)
+    for kind in ["debug", "vm"]:
+        ex = relay.create_executor(kind, mod=mod, ctx=tvm.cpu(), target="llvm")
+        result = ex.evaluate()(data_np, boxes_np, box_indices_np)
+        tvm.testing.assert_allclose(result.asnumpy().shape, ref_out_shape)
+
+def test_any_crop_and_resize():
+    verify_any_crop_and_resize(
+        data_shape=(1, 234, 234, 256),
+        boxes_shape=(relay.Any(), 4),
+        box_indices_shape=(relay.Any(),),
+        crop_size=(14, 14),
+        layout='NHWC',
+        static_boxes=(128, 4),
+        static_box_indices_shape=(128,),
+        ref_out_shape=(128, 14, 14, 256))
+    verify_any_crop_and_resize(
+        data_shape=(1, 256, 234, 234),
+        boxes_shape=(relay.Any(), 4),
+        box_indices_shape=(relay.Any(),),
+        crop_size=(14, 14),
+        layout='NCHW',
+        static_boxes=(128, 4),
+        static_box_indices_shape=(128,),
+        ref_out_shape=(128, 256, 14, 14)
+        )
+
+def verify_any_mirror_pad(data_shape, pad_width, static_data_shape, ref_out_shape):
+    mod = tvm.IRModule()
+    dtype = "float32"
+    data = relay.var('data', shape=data_shape, dtype=dtype)
+    y = relay.nn.mirror_pad(data, pad_width)
+    mod["main"] = relay.Function([data], y)
+    data_np = np.random.uniform(size=static_data_shape).astype(dtype)
+    for kind in ["debug", "vm"]:
+        ex = relay.create_executor(kind, mod=mod, ctx=tvm.cpu(), target="llvm")
+        result = ex.evaluate()(data_np)
+        tvm.testing.assert_allclose(result.asnumpy().shape, ref_out_shape)
+
+def test_any_mirror_pad():
+    verify_any_mirror_pad(
+        data_shape=(1, 256, 232, 232),
+        pad_width=((0, 0), (0, 0), (1, 1), (1, 1)),
+        static_data_shape=(1, 256, 232, 232),
+        ref_out_shape=(1, 256, 234, 234))
+
+def verify_any_ndarray_size(data_np_shape):
+    v = relay.var("v", shape=any_dims(len(data_np_shape)), dtype='float32')
+    n = relay.ndarray_size(v, dtype='int32')
+    mod = tvm.IRModule()
+    mod['main'] = relay.Function([v], n)
+    np_data = np.zeros(data_np_shape, dtype='float32')
+    ref_res = np.size(np_data)
+
+    for kind in ["debug", "vm"]:
+        ex = relay.create_executor(kind, mod=mod, ctx=tvm.cpu(), target="llvm")
+        result = ex.evaluate()(np_data)
+        tvm.testing.assert_allclose(result.asnumpy(), ref_res)
+
+def test_any_ndarray_size():
+    verify_any_ndarray_size((2,))
+    verify_any_ndarray_size((2, 2))
+    verify_any_ndarray_size((1, 2, 3, 4))
 
 if __name__ == "__main__":
     test_any_full()
@@ -796,8 +918,13 @@ if __name__ == "__main__":
     test_any_softmax()
     test_any_topk()
     test_fused_ops()
+    test_any_argwhere()
     test_arange_with_dynamic_shape()
+    test_any_strided_slice()
     test_recursive_concat()
     test_recursive_concat_with_wrong_annotation()
     test_tuple_get_item()
     test_mixed_input_type()
+    test_any_crop_and_resize()
+    test_any_mirror_pad()
+    test_any_ndarray_size()

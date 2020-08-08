@@ -27,7 +27,7 @@
  *   struct MyAttrs : public tvm::AttrsNode<MyAttrs> {
  *     float learning_rate;
  *     int num_hidden;
- *     std::string name;
+ *     String name;
  *     // declare attribute fields in header file
  *     TVM_DECLARE_ATTRS(MyAttrs, "attrs.MyAttrs") {
  *       TVM_ATTR_FIELD(num_hidden).set_lower_bound(1);
@@ -106,11 +106,11 @@ struct AttrError : public dmlc::Error {
 class AttrFieldInfoNode : public Object {
  public:
   /*! \brief name of the field */
-  std::string name;
+  String name;
   /*! \brief type docstring information in str. */
-  std::string type_info;
+  String type_info;
   /*! \brief detailed description of the type */
-  std::string description;
+  String description;
 
   void VisitAttrs(AttrVisitor* v) {
     v->Visit("name", &name);
@@ -337,6 +337,18 @@ struct AttrInitEntry {
   T* value_;
   // whether the value is missing.
   bool value_missing_{true};
+
+  AttrInitEntry() = default;
+
+  AttrInitEntry(AttrInitEntry&& other) {
+    type_key_ = other.type_key_;
+    key_ = other.key_;
+    value_ = other.value_;
+    value_missing_ = other.value_missing_;
+    // avoid unexpected throw
+    other.value_missing_ = false;
+  }
+
   // If the value is still missing in destruction time throw an error.
   ~AttrInitEntry() DMLC_THROW_EXCEPTION {
     if (value_missing_) {
@@ -463,7 +475,11 @@ class AttrInitVisitor {
     } else {
       opt.value_missing_ = true;
     }
-    return opt;
+#if defined(__GNUC__)
+#pragma GCC diagnostic ignored "-Wpragmas"
+#pragma GCC diagnostic ignored "-Wpessimizing-move"
+#endif
+    return std::move(opt);
   }
 
  private:

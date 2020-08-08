@@ -18,12 +18,13 @@
 
 # NOTE: allow unbound variable here
 set +u
+
 if [[ ! -z $CI_PYTEST_ADD_OPTIONS ]]; then
     export PYTEST_ADDOPTS="-v $CI_PYTEST_ADD_OPTIONS"
 else
-    export PYTEST_ADDOPTS=""
+    export PYTEST_ADDOPTS="-v "
 fi
 set -u
 
 export TVM_PATH=`pwd`
-export PYTHONPATH=${TVM_PATH}/python:${TVM_PATH}/topi/python
+export PYTHONPATH=${TVM_PATH}/python

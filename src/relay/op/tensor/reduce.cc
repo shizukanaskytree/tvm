@@ -21,15 +21,16 @@
  * \file reduce.cc
  * \brief Reduction operators.
  */
-#include <topi/elemwise.h>
-#include <topi/reduction.h>
 #include <tvm/relay/attrs/reduce.h>
 #include <tvm/relay/expr.h>
 #include <tvm/relay/op.h>
+#include <tvm/topi/elemwise.h>
+#include <tvm/topi/reduction.h>
 
 #include <limits>
 #include <numeric>
 
+#include "../make_op.h"
 #include "../op_common.h"
 #include "../type_relations.h"
 
@@ -293,15 +294,18 @@ bool ReduceRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
   return true;
 }
 
+Expr MakeReduce(Expr data, Array<Integer> axis, bool keepdims, bool exclude, String op_name) {
+  auto attrs = make_object<ReduceAttrs>();
+  attrs->axis = std::move(axis);
+  attrs->keepdims = keepdims;
+  attrs->exclude = exclude;
+  return Call(Op::Get(op_name), {data}, Attrs(attrs), {});
+}
+
 #define RELAY_REGISTER_REDUCE_OP(OpName)                                                \
   TVM_REGISTER_GLOBAL("relay.op._make." OpName)                                         \
       .set_body_typed([](Expr data, Array<Integer> axis, bool keepdims, bool exclude) { \
-        auto attrs = make_object<ReduceAttrs>();                                        \
-        attrs->axis = std::move(axis);                                                  \
-        attrs->keepdims = keepdims;                                                     \
-        attrs->exclude = exclude;                                                       \
-        static const Op& op = Op::Get(OpName);                                          \
-        return Call(op, {data}, Attrs(attrs), {});                                      \
+        return MakeReduce(data, axis, keepdims, exclude, OpName);                       \
       });                                                                               \
   RELAY_REGISTER_OP(OpName).set_num_inputs(1).add_argument("data", "Tensor", "The input tensor.")
 

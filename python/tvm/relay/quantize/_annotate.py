@@ -17,7 +17,7 @@
 #pylint: disable=unused-argument,inconsistent-return-statements
 """Internal module for registering attribute for annotation."""
 import warnings
-import topi
+from tvm import topi
 import tvm._ffi
 from tvm.relay.op import op as _reg
 from .. import expr as _expr
@@ -173,11 +173,14 @@ def conv2d_rewrite(ref_call, new_args, ctx):
     return QAnnotateExpr(expr, QAnnotateKind.ACTIVATION)
 
 
-# TODO(tmoreau89,ziheng) need to include an option to turn off dense quant
-# @register_annotate_function("nn.dense")
+@register_annotate_function("nn.dense")
 def dense_rewrite(ref_call, new_args, ctx):
     """Rewrite function for dense. Lhs of dense will be quantized to input field, and rhs of
     dense will be quantized to weight field. Output would be in activation field."""
+
+    if current_qconfig().skip_dense_layer:
+        return None
+
     if quantize_context().check_to_skip(ref_call):
         return None
 

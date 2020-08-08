@@ -239,19 +239,23 @@ class TaskTemplate(object):
     def _default_func(self, *args, **kwargs):
         assert callable(self.fcompute) and callable(self.fschedule)
         out = self.fcompute(*args, **kwargs)
-        arg_bufs = [out] + self.get_inputs(out)
+        arg_bufs = [out] + self._get_inputs(out)
         s = self.fschedule([out])
         return s, arg_bufs
 
-    def get_inputs(self, out):
+    @staticmethod
+    def _get_inputs(out):
         inputs = []
         queue = [out]
+        hash_set = set()
         while queue:
             t = queue.pop(0)
             if isinstance(t.op, tensor.PlaceholderOp):
                 inputs.append(t)
             else:
-                queue.extend(t.op.input_tensors)
+                input_tensors = [t for t in t.op.input_tensors if t not in hash_set]
+                queue.extend(input_tensors)
+                hash_set.update(input_tensors)
         return inputs
 
 def _register_task_compute(name, func=None):
@@ -542,11 +546,11 @@ def compute_flop(sch):
         if isinstance(exp, expr.Select):
             return _count_flop(exp.condition) + max(_count_flop(exp.true_value),
                                                     _count_flop(exp.false_value))
-        if isinstance(exp, expr.Call):
-            if exp.call_type == expr.Call.Halide:
-                # Ignore flops from indexing expressions.
-                return 0
+        if isinstance(exp, expr.ProducerLoad):
+            # Ignore flops from indexing expressions.
+            return 0
 
+        if isinstance(exp, expr.Call):
             return sum([_count_flop(x) for x in exp.args])
 
         raise FlopCalculationError("Found unsupported operator in the compute expr")

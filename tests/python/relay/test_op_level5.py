@@ -23,7 +23,7 @@ from tvm import te
 from tvm import relay
 from tvm.relay import transform
 from tvm.relay.testing import ctx_list, run_infer_type
-import topi.testing
+import tvm.topi.testing
 
 
 def test_resize_infer_type():
@@ -49,9 +49,9 @@ def test_resize():
 
         x_data = np.random.uniform(size=dshape).astype("float32")
         if method == "bilinear":
-            ref_res = topi.testing.bilinear_resize_python(x_data, size, layout)
+            ref_res = tvm.topi.testing.bilinear_resize_python(x_data, size, layout)
         else:
-            ref_res = topi.testing.upsampling_python(x_data, (scale, scale), layout)
+            ref_res = tvm.topi.testing.upsampling_python(x_data, (scale, scale), layout)
         x = relay.var("x", relay.TensorType(dshape, "float32"))
         z = relay.image.resize(x, size, layout, method, "align_corners")
         assert "size=" in z.astext()
@@ -63,7 +63,7 @@ def test_resize():
             for kind in ["graph", "debug"]:
                 intrp = relay.create_executor(kind, ctx=ctx, target=target)
                 op_res = intrp.evaluate(func)(x_data)
-                tvm.testing.assert_allclose(op_res.asnumpy(), ref_res, rtol=1e-4)
+                tvm.testing.assert_allclose(op_res.asnumpy(), ref_res, rtol=1e-4, atol=1e-6)
     for method in ["bilinear", "nearest_neighbor"]:
         for layout in ["NHWC", "NCHW"]:
             verify_resize((1, 4, 4, 4), 2, method, layout)
@@ -91,9 +91,9 @@ def test_resize3d():
 
         x_data = np.random.uniform(size=dshape).astype("float32")
         if method == "trilinear":
-            ref_res = topi.testing.trilinear_resize3d_python(x_data, size, layout)
+            ref_res = tvm.topi.testing.trilinear_resize3d_python(x_data, size, layout)
         else:
-            ref_res = topi.testing.upsampling3d_python(x_data, (scale, scale, scale), layout)
+            ref_res = tvm.topi.testing.upsampling3d_python(x_data, (scale, scale, scale), layout)
         x = relay.var("x", relay.TensorType(dshape, "float32"))
         z = relay.image.resize3d(x, size, layout, method, "align_corners")
         assert "size=" in z.astext()
@@ -116,7 +116,7 @@ def test_crop_and_resize():
 
         image_data = np.random.uniform(size=img_shape).astype("float32")
 
-        ref_res = topi.testing.crop_and_resize_python(image_data,
+        ref_res = tvm.topi.testing.crop_and_resize_python(image_data,
                                                       boxes,
                                                       box_indices,
                                                       crop_size,
@@ -244,6 +244,7 @@ def test_get_valid_counts():
         np_data = np.random.uniform(low=-2, high=2, size=dshape).astype(dtype)
         np_out1 = np.zeros(shape=(batch_size,))
         np_out2 = np.zeros(shape=dshape).astype(dtype)
+        np_out3 = np.zeros(shape=(batch_size, num_anchor))
         for i in range(batch_size):
             np_out1[i] = 0
             inter_idx = 0
@@ -253,10 +254,12 @@ def test_get_valid_counts():
                     for k in range(elem_length):
                         np_out2[i, inter_idx, k] = np_data[i, j, k]
                     np_out1[i] += 1
+                    np_out3[i, inter_idx] = j
                     inter_idx += 1
                 if j >= np_out1[i]:
                     for k in range(elem_length):
                         np_out2[i, j, k] = -1.0
+                    np_out3[i, j] = -1
 
         x = relay.var("x", relay.ty.TensorType(dshape, dtype))
         z = relay.vision.get_valid_counts(x, score_threshold, id_index, score_index)
@@ -267,10 +270,11 @@ def test_get_valid_counts():
             intrp = relay.create_executor("debug", ctx=ctx, target=target)
             out = intrp.evaluate(func)(np_data)
             tvm.testing.assert_allclose(out[0].asnumpy(), np_out1, rtol=1e-3, atol=1e-04)
-            # get_valid_count for cuda doesn't do data rearrangement
-            if target == 'cuda':
+            # get_valid_count for cuda, opencl doesn't do data rearrangement
+            if target in ['cuda', 'opencl']:
                 return
             tvm.testing.assert_allclose(out[1].asnumpy(), np_out2, rtol=1e-3, atol=1e-04)
+            tvm.testing.assert_allclose(out[2].asnumpy(), np_out3, rtol=1e-3, atol=1e-04)
 
     verify_get_valid_counts((1, 2500, 6), 0, 0, 1)
     verify_get_valid_counts((1, 2500, 5), -1, -1, 0)
@@ -279,70 +283,82 @@ def test_get_valid_counts():
 
 
 def test_non_max_suppression():
-    def verify_nms(x0_data, x1_data, dshape, ref_res, ref_indices_res,
-                   iou_threshold=0.5, force_suppress=False, top_k=-1,
-                   check_type_only=False):
+    def verify_nms(x0_data, x1_data, x2_data, x3_data, dshape, ref_res,
+                   ref_indices_res, iou_threshold=0.5, force_suppress=False,
+                   top_k=-1, check_type_only=False):
         x0 = relay.var("x0", relay.ty.TensorType(dshape, "float32"))
         x1 = relay.var("x1", relay.ty.TensorType((dshape[0],), "int32"))
-        z = relay.vision.non_max_suppression(x0, x1, max_output_size = -1, \
-            iou_threshold = iou_threshold, force_suppress = force_suppress, \
-            top_k = top_k, return_indices=False)
-        z_indices = relay.vision.non_max_suppression(x0, x1, max_output_size = -1, \
-                    iou_threshold = iou_threshold, force_suppress = force_suppress, \
-                    top_k = top_k)
+        x2 = relay.var("x2", relay.ty.TensorType((dshape[0], dshape[1]), "int32"))
+        x3 = relay.var("x3", relay.ty.TensorType((), "int32"))
+        z = relay.vision.non_max_suppression(x0, x1, x2, x3, \
+            iou_threshold=iou_threshold, force_suppress=force_suppress, \
+            top_k=top_k, return_indices=False)
+        z_indices = relay.vision.non_max_suppression(x0, x1, x2, x3, \
+                    iou_threshold=iou_threshold, force_suppress=force_suppress, \
+                    top_k=top_k, return_indices=True)
+        if isinstance(z_indices, relay.expr.TupleWrapper):
+            z_indices = z_indices.astuple()
         assert "iou_threshold" in z.astext()
         assert "iou_threshold" in z_indices.astext()
         zz = run_infer_type(z)
         zz_indices = run_infer_type(z_indices)
         assert zz.checked_type == relay.ty.TensorType(dshape, "float32")
-        assert zz_indices.checked_type == relay.ty.TensorType((dshape[0], dshape[1]), "int32")
+        assert zz_indices.checked_type == relay.ty.TupleType(
+            [relay.ty.TensorType((dshape[0], dshape[1]), "int32"),
+             relay.ty.TensorType((dshape[0], 1), "int32")])
 
         if check_type_only:
             return
 
-        func = relay.Function([x0, x1], z)
+        func = relay.Function([x0, x1, x2, x3], z)
         func = run_infer_type(func)
-        func_indices = relay.Function([x0, x1], z_indices)
+        func_indices = relay.Function([x0, x1, x2, x3], z_indices)
         func_indices = run_infer_type(func_indices)
         for target, ctx in ctx_list():
             intrp1 = relay.create_executor("graph", ctx=ctx, target=target)
-            op_res1 = intrp1.evaluate(func)(x0_data, x1_data)
-            op_indices_res1 = intrp1.evaluate(func_indices)(x0_data, x1_data)
+            op_res1 = intrp1.evaluate(func)(x0_data, x1_data, x2_data, x3_data)
             tvm.testing.assert_allclose(op_res1.asnumpy(), ref_res, rtol=1e-5)
-            tvm.testing.assert_allclose(op_indices_res1.asnumpy(), ref_indices_res, rtol=1e-5)
             intrp2 = relay.create_executor("debug", ctx=ctx, target=target)
-            op_res2 = intrp2.evaluate(func)(x0_data, x1_data)
-            op_indices_res2 = intrp2.evaluate(func_indices)(x0_data, x1_data)
+            op_res2 = intrp2.evaluate(func)(x0_data, x1_data, x2_data, x3_data)
             tvm.testing.assert_allclose(op_res2.asnumpy(), ref_res, rtol=1e-5)
-            tvm.testing.assert_allclose(op_indices_res2.asnumpy(), ref_indices_res, rtol=1e-5)
+            if target == 'cuda':
+                return
+            op_indices_res1 = intrp1.evaluate(func_indices)(x0_data, x1_data, x2_data, x3_data)
+            tvm.testing.assert_allclose(op_indices_res1[0].asnumpy(), ref_indices_res, rtol=1e-5)
+            op_indices_res2 = intrp2.evaluate(func_indices)(x0_data, x1_data, x2_data, x3_data)
+            tvm.testing.assert_allclose(op_indices_res2[0].asnumpy(), ref_indices_res, rtol=1e-5)
 
     np_data = np.array([[[0, 0.8, 1, 20, 25, 45], [1, 0.7, 30, 60, 50, 80],
                          [0, 0.4, 4, 21, 19, 40], [2, 0.9, 35, 61, 52, 79],
                          [1, 0.5, 100, 60, 70, 110]]]).astype("float32")
     np_valid_count = np.array([4]).astype("int32")
+    np_indices = np.array([[0, 1, 3, 4, -1]]).astype("int32")
+    np_max_output_size = -1
+
     np_result = np.array([[[2, 0.9, 35, 61, 52, 79], [0, 0.8, 1, 20, 25, 45],
                            [-1, -1, -1, -1, -1, -1], [-1, -1, -1, -1, -1, -1],
                            [-1, -1, -1, -1, -1, -1]]])
-    np_indices_result = np.array([[3, 0, -1, -1, -1]])
+    np_indices_result = np.array([[4, 0, -1, -1, -1]])
     num_anchors = 5
 
     dshape = (te.size_var("n"), num_anchors, 6)
-    verify_nms(np_data, np_valid_count, dshape, np_result, np_indices_result,
+    verify_nms(np_data, np_valid_count, np_indices, np_max_output_size, dshape, np_result, np_indices_result,
                force_suppress=True, top_k=2, check_type_only=True)
     dshape = (1, num_anchors, 6)
-    verify_nms(np_data, np_valid_count, dshape, np_result, np_indices_result,
+    verify_nms(np_data, np_valid_count, np_indices, np_max_output_size, dshape, np_result, np_indices_result,
                force_suppress=True, top_k=2, check_type_only=False)
 
     np_result = np.array([[[2, 0.9, 35, 61, 52, 79], [0, 0.8, 1, 20, 25, 45],
-                           [1, 0.7, 30, 60, 50, 80], [-1, -1, -1, -1, -1, -1],
+                           [-1, -1, -1, -1, -1, -1], [-1, -1, -1, -1, -1, -1],
                            [-1, -1, -1, -1, -1, -1]]])
-    np_indices_result = np.array([[3, 0, 1, -1, -1]])
+    np_indices_result = np.array([[4, 0, -1, -1, -1]])
+    np_max_output_size = 2
     dshape = (te.size_var("n"), num_anchors, 6)
-    verify_nms(np_data, np_valid_count, dshape, np_result,
+    verify_nms(np_data, np_valid_count, np_indices, np_max_output_size, dshape, np_result,
                np_indices_result, check_type_only=True)
     dshape = (1, num_anchors, 6)
-    verify_nms(np_data, np_valid_count, dshape, np_result,
-               np_indices_result, top_k=3)
+    verify_nms(np_data, np_valid_count, np_indices, np_max_output_size, dshape, np_result,
+               np_indices_result, top_k=2)
 
 
 def test_multibox_transform_loc():
@@ -384,7 +400,7 @@ def test_multibox_transform_loc():
 
         assert ret.checked_type == ref_type
 
-        nms = relay.vision.non_max_suppression(mtl[0], mtl[1], return_indices=False)
+        nms = relay.vision.non_max_suppression(mtl[0], mtl[1], mtl[0], return_indices=False)
         func = relay.Function([cls_prob, loc_pred, anchors], nms)
         func = run_infer_type(func)
         for target, ctx in ctx_list():
@@ -447,7 +463,7 @@ def test_roi_align():
         np_data = np.random.uniform(size=data_shape).astype("float32")
         np_rois = np.random.uniform(size=rois_shape).astype('float32') * in_size
         np_rois[:, 0] = np.random.randint(low = 0, high = batch, size = num_roi)
-        ref_res = topi.testing.roi_align_nchw_python(np_data, np_rois, pooled_size=pooled_size,
+        ref_res = tvm.topi.testing.roi_align_nchw_python(np_data, np_rois, pooled_size=pooled_size,
                                                      spatial_scale=spatial_scale,
                                                      sample_ratio=sample_ratio)
         for target, ctx in ctx_list():
@@ -479,7 +495,7 @@ def test_roi_pool():
         np_data = np.random.uniform(size=data_shape).astype("float32")
         np_rois = np.random.uniform(size=rois_shape).astype('float32') * in_size
         np_rois[:, 0] = np.random.randint(low = 0, high = batch, size = num_roi).astype('float32')
-        ref_res = topi.testing.roi_pool_nchw_python(np_data, np_rois, pooled_size=pooled_size,
+        ref_res = tvm.topi.testing.roi_pool_nchw_python(np_data, np_rois, pooled_size=pooled_size,
                                                      spatial_scale=spatial_scale)
         for target, ctx in ctx_list():
             intrp1 = relay.create_executor("graph", ctx=ctx, target=target)
@@ -574,7 +590,7 @@ def test_yolo_reorg_infer_shape():
 def test_yolo_reorg():
     def verify_yolo_reorg(shape, stride):
         x_data = np.random.uniform(low=-1, high=1, size=shape).astype("float32")
-        ref_res = topi.testing.reorg_python(x_data, stride)
+        ref_res = tvm.topi.testing.reorg_python(x_data, stride)
 
         x = relay.var("x", relay.TensorType(shape, "float32"))
         z = relay.vision.yolo_reorg(x, stride=stride)
@@ -642,7 +658,7 @@ def test_deformable_conv2d():
         data = np.random.uniform(size=data_shape).astype(dtype)
         offset = np.random.uniform(size=offset_shape).astype(dtype)
         kernel = np.random.uniform(size=kernel_shape).astype(dtype)
-        ref_res = topi.testing.deformable_conv2d_nchw_python(data, offset, kernel, stride=(1, 1), padding=(1, 1), dilation=(1, 1), deformable_groups=deformable_groups, groups=groups)
+        ref_res = tvm.topi.testing.deformable_conv2d_nchw_python(data, offset, kernel, stride=(1, 1), padding=(1, 1), dilation=(1, 1), deformable_groups=deformable_groups, groups=groups)
 
         for target, ctx in ctx_list():
             for kind in ["graph", "debug"]:
@@ -663,7 +679,7 @@ def test_depth_to_space():
         x_data = np.random.uniform(size=dshape).astype("float32")
         if layout == "NHWC":
             x_data = np.transpose(x_data, axes=[0, 3, 1, 2])
-        ref_res = topi.testing.depth_to_space_python(x_data, block_size, mode=mode)
+        ref_res = tvm.topi.testing.depth_to_space_python(x_data, block_size, mode=mode)
         if layout == "NHWC":
             x_data = np.transpose(x_data, axes=[0, 2, 3, 1])
             ref_res = np.transpose(ref_res, axes=[0, 2, 3, 1])
@@ -695,7 +711,7 @@ def test_space_to_depth():
         x_data = np.random.uniform(size=dshape).astype("float32")
         if layout == "NHWC":
             x_data = np.transpose(x_data, axes=[0, 3, 1, 2])
-        ref_res = topi.testing.space_to_depth_python(x_data, block_size)
+        ref_res = tvm.topi.testing.space_to_depth_python(x_data, block_size)
         if layout == "NHWC":
             x_data = np.transpose(x_data, axes=[0, 2, 3, 1])
             ref_res = np.transpose(ref_res, axes=[0, 2, 3, 1])
@@ -834,7 +850,7 @@ def test_affine_grid():
 
         func = relay.Function([data], y)
         data_np = np.random.uniform(size=data_shape).astype(dtype)
-        ref_res = topi.testing.affine_grid_python(data_np, target_shape)
+        ref_res = tvm.topi.testing.affine_grid_python(data_np, target_shape)
 
         for target, ctx in ctx_list():
             for kind in ["graph", "debug"]:
@@ -860,7 +876,7 @@ def test_grid_sample():
 
         data_np = np.random.uniform(size=data_shape).astype(dtype)
         grid_np = np.random.uniform(size=grid_shape, low=-1.5, high=1.5).astype(dtype)
-        ref_res = topi.testing.grid_sample_nchw_python(data_np, grid_np, method='bilinear')
+        ref_res = tvm.topi.testing.grid_sample_nchw_python(data_np, grid_np, method='bilinear')
 
         for target, ctx in ctx_list():
             for kind in ["graph", "debug"]:

@@ -26,6 +26,7 @@
 
 #include <dmlc/logging.h>
 #include <tvm/runtime/c_runtime_api.h>
+#include <tvm/runtime/container.h>
 #include <tvm/runtime/data_type.h>
 #include <tvm/runtime/module.h>
 #include <tvm/runtime/ndarray.h>
@@ -327,9 +328,16 @@ class TVMArgs {
   inline TVMArgValue operator[](int i) const;
 };
 
+/*!
+ * \brief Convert argument type code to string.
+ * \param type_code The input type code.
+ * \return The corresponding string repr.
+ */
+inline const char* ArgTypeCode2Str(int type_code);
+
 // macro to check type code.
 #define TVM_CHECK_TYPE_CODE(CODE, T) \
-  CHECK_EQ(CODE, T) << " expected " << TypeCode2Str(T) << " but get " << TypeCode2Str(CODE)
+  CHECK_EQ(CODE, T) << " expected " << ArgTypeCode2Str(T) << " but get " << ArgTypeCode2Str(CODE)
 
 /*!
  * \brief Type traits for runtime type check during FFI conversion.
@@ -394,7 +402,7 @@ class TVMPODValue_ {
     } else {
       if (type_code_ == kTVMNullptr) return nullptr;
       LOG(FATAL) << "Expect "
-                 << "DLTensor* or NDArray but get " << TypeCode2Str(type_code_);
+                 << "DLTensor* or NDArray but get " << ArgTypeCode2Str(type_code_);
       return nullptr;
     }
   }
@@ -485,22 +493,6 @@ class TVMArgValue : public TVMPODValue_ {
       return std::string(value_.v_str);
     }
   }
-  operator DLDataType() const {
-    if (type_code_ == kTVMStr) {
-      return String2DLDataType(operator std::string());
-    }
-    // None type
-    if (type_code_ == kTVMNullptr) {
-      DLDataType t;
-      t.code = kTVMOpaqueHandle;
-      t.bits = 0;
-      t.lanes = 0;
-      return t;
-    }
-    TVM_CHECK_TYPE_CODE(type_code_, kTVMDataType);
-    return value_.v_type;
-  }
-  operator DataType() const { return DataType(operator DLDataType()); }
   operator PackedFunc() const {
     if (type_code_ == kTVMNullptr) return PackedFunc();
     TVM_CHECK_TYPE_CODE(type_code_, kTVMPackedFuncHandle);
@@ -514,6 +506,8 @@ class TVMArgValue : public TVMPODValue_ {
 
   template <typename T, typename = typename std::enable_if<std::is_class<T>::value>::type>
   inline operator T() const;
+  inline operator DLDataType() const;
+  inline operator DataType() const;
 };
 
 /*!
@@ -715,8 +709,8 @@ class TVMRetValue : public TVMPODValue_ {
   /*!
    * \brief Move the value back to front-end via C API.
    *  This marks the current container as null.
-   *  The managed resources is moved to front-end and
-   *  the front end should take charge in managing them.
+   *  The managed resources are moved to the front-end.
+   *  The front end should take charge in managing them.
    *
    * \param ret_value The return value.
    * \param ret_type_code The return type code.
@@ -982,6 +976,44 @@ inline void PackedFunc::CallPacked(TVMArgs args, TVMRetValue* rv) const { body_(
 inline PackedFunc::FType PackedFunc::body() const { return body_; }
 
 // internal namespace
+inline const char* ArgTypeCode2Str(int type_code) {
+  switch (type_code) {
+    case kDLInt:
+      return "int";
+    case kDLUInt:
+      return "uint";
+    case kDLFloat:
+      return "float";
+    case kTVMStr:
+      return "str";
+    case kTVMBytes:
+      return "bytes";
+    case kTVMOpaqueHandle:
+      return "handle";
+    case kTVMNullptr:
+      return "NULL";
+    case kTVMDLTensorHandle:
+      return "ArrayHandle";
+    case kTVMDataType:
+      return "DLDataType";
+    case kTVMContext:
+      return "TVMContext";
+    case kTVMPackedFuncHandle:
+      return "FunctionHandle";
+    case kTVMModuleHandle:
+      return "ModuleHandle";
+    case kTVMNDArrayHandle:
+      return "NDArrayContainer";
+    case kTVMObjectHandle:
+      return "Object";
+    case kTVMObjectRValueRefArg:
+      return "ObjectRValueRefArg";
+    default:
+      LOG(FATAL) << "unknown type_code=" << static_cast<int>(type_code);
+      return "";
+  }
+}
+
 namespace detail {
 
 template <bool stop, std::size_t I, typename F>
@@ -1427,6 +1459,60 @@ inline TVMRetValue::operator T() const {
 inline PackedFunc Module::GetFunction(const std::string& name, bool query_imports) {
   return (*this)->GetFunction(name, query_imports);
 }
+
+// specializations of PackedFuncValueConverter
+template <>
+struct PackedFuncValueConverter<::tvm::runtime::String> {
+  static String From(const TVMArgValue& val) {
+    if (val.IsObjectRef<tvm::runtime::String>()) {
+      return val.AsObjectRef<tvm::runtime::String>();
+    } else {
+      return tvm::runtime::String(val.operator std::string());
+    }
+  }
+
+  static String From(const TVMRetValue& val) {
+    if (val.IsObjectRef<tvm::runtime::String>()) {
+      return val.AsObjectRef<tvm::runtime::String>();
+    } else {
+      return tvm::runtime::String(val.operator std::string());
+    }
+  }
+};
+
+template <typename T>
+struct PackedFuncValueConverter<Optional<T>> {
+  static Optional<T> From(const TVMArgValue& val) {
+    if (val.type_code() == kTVMNullptr) return Optional<T>(nullptr);
+    return PackedFuncValueConverter<T>::From(val);
+  }
+  static Optional<T> From(const TVMRetValue& val) {
+    if (val.type_code() == kTVMNullptr) return Optional<T>(nullptr);
+    return PackedFuncValueConverter<T>::From(val);
+  }
+};
+
+inline bool String::CanConvertFrom(const TVMArgValue& val) {
+  return val.type_code() == kTVMStr || val.IsObjectRef<tvm::runtime::String>();
+}
+
+inline TVMArgValue::operator DLDataType() const {
+  if (String::CanConvertFrom(*this)) {
+    return String2DLDataType(PackedFuncValueConverter<String>::From(*this).operator std::string());
+  }
+  // None type
+  if (type_code_ == kTVMNullptr) {
+    DLDataType t;
+    t.code = kTVMOpaqueHandle;
+    t.bits = 0;
+    t.lanes = 0;
+    return t;
+  }
+  TVM_CHECK_TYPE_CODE(type_code_, kTVMDataType);
+  return value_.v_type;
+}
+
+inline TVMArgValue::operator DataType() const { return DataType(operator DLDataType()); }
 
 }  // namespace runtime
 }  // namespace tvm

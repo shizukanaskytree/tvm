@@ -82,7 +82,7 @@ struct TransposeAttrs : public tvm::AttrsNode<TransposeAttrs> {
 
 /*! \brief Attributes used in reshape operators */
 struct ReshapeAttrs : public tvm::AttrsNode<ReshapeAttrs> {
-  Optional<Array<Integer>> newshape;
+  Array<Integer> newshape;
   bool reverse;
   TVM_DECLARE_ATTRS(ReshapeAttrs, "relay.attrs.ReshapeAttrs") {
     TVM_ATTR_FIELD(newshape).describe(
@@ -92,6 +92,32 @@ struct ReshapeAttrs : public tvm::AttrsNode<ReshapeAttrs> {
         .set_default(false);
   }
 };  // struct ReshapeAttrs
+
+struct ScatterAttrs : public tvm::AttrsNode<ScatterAttrs> {
+  Integer axis;
+
+  TVM_DECLARE_ATTRS(ScatterAttrs, "relay.attrs.ScatterAttrs") {
+    TVM_ATTR_FIELD(axis).set_default(0).describe("The axis over which to select values.");
+  }
+};
+
+struct ScatterAddAttrs : public tvm::AttrsNode<ScatterAddAttrs> {
+  Integer axis;
+
+  TVM_DECLARE_ATTRS(ScatterAddAttrs, "relay.attrs.ScatterAddAttrs") {
+    TVM_ATTR_FIELD(axis).set_default(0).describe("The axis over which to select values.");
+  }
+};
+
+struct GatherAttrs : public tvm::AttrsNode<GatherAttrs> {
+  Integer axis;
+
+  TVM_DECLARE_ATTRS(GatherAttrs, "relay.attrs.GatherAttrs") {
+    TVM_ATTR_FIELD(axis)
+        .set_default(NullValue<Integer>())
+        .describe("The axis over which to select values.");
+  }
+};
 
 struct TakeAttrs : public tvm::AttrsNode<TakeAttrs> {
   Integer axis;
@@ -135,6 +161,19 @@ struct ArangeAttrs : public tvm::AttrsNode<ArangeAttrs> {
   }
 };  // struct ArangeAttrs
 
+/*! \brief Attributes used in meshgrid operators */
+struct MeshgridAttrs : public tvm::AttrsNode<MeshgridAttrs> {
+  std::string indexing;
+
+  TVM_DECLARE_ATTRS(MeshgridAttrs, "relay.attrs.MeshgridAttrs") {
+    TVM_ATTR_FIELD(indexing)
+        .describe(
+            "Indexing mode, either \"ij\" for matrix or \"xy\" for cartesian in which first two"
+            "dimensions are swapped.")
+        .set_default("ij");
+  }
+};  // struct MeshgridAttrs
+
 /*! \brief Attributes used in stack operators */
 struct StackAttrs : public tvm::AttrsNode<StackAttrs> {
   Integer axis;
@@ -176,6 +215,20 @@ struct ReverseAttrs : public tvm::AttrsNode<ReverseAttrs> {
   }
 };  // struct ReverseAttrs
 
+/*! \brief Attributes used in reverse_sequence operators */
+struct ReverseSequenceAttrs : public tvm::AttrsNode<ReverseSequenceAttrs> {
+  Integer seq_axis;
+  Integer batch_axis;
+
+  TVM_DECLARE_ATTRS(ReverseSequenceAttrs, "relay.attrs.ReverseSequenceAttrs") {
+    TVM_ATTR_FIELD(seq_axis).set_default(1).describe(
+        "The seq axis along which to reverse elements.");
+    TVM_ATTR_FIELD(batch_axis)
+        .set_default(0)
+        .describe("The batch axis along which to slice the tensor.");
+  }
+};  // struct ReverseSequenceAttrs
+
 /*! \brief Attributes used in squeeze operators */
 struct SqueezeAttrs : public tvm::AttrsNode<SqueezeAttrs> {
   // use axis to make the name numpy compatible.
@@ -210,14 +263,24 @@ struct SplitAttrs : public tvm::AttrsNode<SplitAttrs> {
 
 /*! \brief Attributes for StridedSlice operator */
 struct StridedSliceAttrs : public tvm::AttrsNode<StridedSliceAttrs> {
-  Array<Integer> begin;
-  Array<Integer> end;
-  Array<Integer> strides;
+  Optional<Array<Integer>> begin;
+  Optional<Array<Integer>> end;
+  Optional<Array<Integer>> strides;
+  std::string slice_mode;
 
   TVM_DECLARE_ATTRS(StridedSliceAttrs, "relay.attrs.StridedSliceAttrs") {
     TVM_ATTR_FIELD(begin).describe("Indices for begin of slice, begin index is also inclusive");
     TVM_ATTR_FIELD(end).describe("Indices for end of slice, end index is exclusive");
-    TVM_ATTR_FIELD(strides).set_default(Array<Integer>({})).describe("Stride values of the slice");
+    TVM_ATTR_FIELD(strides).describe(
+        "Stride values of the slice, a stride can be negative, which causes a reverse slice.");
+    TVM_ATTR_FIELD(slice_mode)
+        .set_default("end")
+        .describe(
+            "The slice mode [end, size]."
+            "end - The default slice mode, ending indices for the slice."
+            "size - The input strides will be ignored, input end in this mode indicates the size"
+            "of a slice starting at the location specified by begin. If end[i] is -1,"
+            "all remaining elements in that dimension are included in the slice");
   }
 };
 
@@ -240,6 +303,19 @@ struct ClipAttrs : public tvm::AttrsNode<ClipAttrs> {
   TVM_DECLARE_ATTRS(ClipAttrs, "relay.attrs.ClipAttrs") {
     TVM_ATTR_FIELD(a_min).describe("The minimum clip value.");
     TVM_ATTR_FIELD(a_max).describe("The maximum clip value.");
+  }
+};
+
+/*! \brief Attributes for FixedPointMultiply operator */
+struct FixedPointMultiplyAttrs : public tvm::AttrsNode<FixedPointMultiplyAttrs> {
+  int32_t multiplier;
+  int32_t shift;
+
+  TVM_DECLARE_ATTRS(FixedPointMultiplyAttrs, "relay.attrs.FixedPointMultiplyAttrs") {
+    TVM_ATTR_FIELD(multiplier)
+        .describe("Multiplier of a fixed floating point number described as multiplier*2^(shift)");
+    TVM_ATTR_FIELD(shift).describe(
+        "Shift of a fixed floating point number described as multiplier*2^(shift)");
   }
 };
 
@@ -273,6 +349,15 @@ struct SequenceMaskAttrs : public tvm::AttrsNode<SequenceMaskAttrs> {
         "The axis of the length dimension. Can only be 0 or 1.");
   }
 };  // struct SequenceMaskAttrs.
+
+/*! \brief Attributes used in sparse_to_dense operator */
+struct SparseToDenseAttrs : public tvm::AttrsNode<SparseToDenseAttrs> {
+  Array<Integer> output_shape;
+
+  TVM_DECLARE_ATTRS(SparseToDenseAttrs, "relay.attrs.SparseToDenseAttrs") {
+    TVM_ATTR_FIELD(output_shape).describe("Shape of the dense output tensor");
+  }
+};  // struct SparseToDenseAttrs
 
 /*! \brief Attributes for ndarray_size operator */
 struct NdarraySizeAttrs : public tvm::AttrsNode<NdarraySizeAttrs> {
